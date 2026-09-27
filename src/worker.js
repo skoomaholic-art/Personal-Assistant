@@ -3,7 +3,6 @@ import {
   menuMarkup, backMarkup, emailMarkup, taskMarkup, normalizePriority,
   isEmailObject, localDayBounds
 } from './router.js';
-import { STAGING_SCHEMA_STATEMENTS } from './staging-schema.js';
 
 const JSON_HEADERS = {'content-type':'application/json; charset=utf-8', 'cache-control':'no-store'};
 const ok = (data, status = 200) => Response.json(data, {status, headers:JSON_HEADERS});
@@ -316,15 +315,7 @@ export default {
     if(request.method==='GET'&&path==='/health') return ok({ok:true,service:'rahal-mamut',phase:'staging',version:'0.1.0'});
     if(request.method==='GET'&&path==='/health/db') {
       if (!env.DB) return ok({ok:false,phase:'staging',database:'unbound'},503);
-      const hostname=new URL(request.url).hostname;
-      const canBootstrap=env.STAGING_SCHEMA_BOOTSTRAP==='true' &&
-        hostname==='rahal-mamut-staging.alexandr-petrossov.workers.dev' &&
-        env.MAIL_INGEST_ENABLED!=='true' &&
-        env.WORKER_EMAIL_NOTIFICATIONS!=='true';
       try {
-        if(canBootstrap) {
-          await env.DB.batch(STAGING_SCHEMA_STATEMENTS.map(sql=>env.DB.prepare(sql)));
-        }
         const tables=await env.DB.prepare(
           "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('telegram_updates','emails','tasks','history','states') ORDER BY name"
         ).all();
