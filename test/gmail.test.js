@@ -10,7 +10,7 @@ function sampleMail({id='a1b2c3d4',from='Vendor <notice@vendor.example>',to='Ale
     payload:{mimeType:'multipart/mixed',headers:[
       {name:'From',value:from},{name:'To',value:to},{name:'Subject',value:subject}],
       parts:[
-        {mimeType:'text/plain',body:{data:btoa(body).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'')}},
+        {mimeType:'text/plain',body:{data:Buffer.from(body,'utf8').toString('base64url')}},
         {mimeType:'application/pdf',filename:'specification.pdf',body:{attachmentId:'att1'}}]
     }
   };
@@ -132,7 +132,7 @@ test('poll queues only unseen IDs and never reads full message bodies in cron',a
   assert.deepEqual(sent,[{kind:'gmail_ingest',id:'c1b2c3d4'},{kind:'gmail_ingest',id:'b1b2c3d4'}]);
 });
 test('malformed and forged Gmail message IDs are rejected',async()=>{
-  await assert.rejects(gmailMessageTokenless('bad/path'),/Invalid/).catch(()=>{});
+  await assert.rejects(gmailMessageTokenless('bad/path'),/Invalid/);
 });
 async function gmailMessageTokenless(id) {
   const {gmailMessage}=await import('../src/gmail.js');
