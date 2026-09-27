@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "rahal-mamut-staging",
+  "account_id": "1ddef0e5e228aa4a8e748b50e1a86bfb",
   "main": "src/worker.js",
   "compatibility_date": "2026-09-27",
   "vars": {
@@ -13,7 +14,7 @@
   "d1_databases": [{
     "binding": "DB",
     "database_name": "rahal-mamut-staging",
-    "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+    "database_id": "0b294974-73c7-40b1-93c3-dfb6dcb797e7",
     "migrations_dir": "migrations"
   }],
   "queues": {
