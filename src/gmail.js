@@ -301,7 +301,30 @@ export async function pollGmail(env) {
   if (env.GMAIL_POLL_ENABLED!=='true') return {disabled:true};
   if (!env.DB || !env.JOBS) throw new Error('Staging DB or queue is not configured');
   const token=await gmailAccessToken(env);
-  const q=env.GMAIL_QUERY || 'in:inbox newer_than:7d -in:spam -in:trash';
+  let q=String(env.GMAIL_QUERY||'').trim();
+  if(!q && !env.GMAIL_REFRESH_TOKEN) {
+    // Starting with the real owner's consent timestamp avoids importing old
+    // messages already handled by the still-live Apps Script. This floor is
+    // persisted once, so renewing Google authorization never skips mail.
+    const connected=await env.DB.prepare(
+      "SELECT updated_at FROM oauth_credentials WHERE provider='gmail'"
+    ).first();
+    const initial=Date.parse(connected?.updated_at||'');
+    if(!Number.isFinite(initial)||initial<=0)
+      throw new Error('Gmail start checkpoint unavailable');
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO states(chat_id,mode,data,updated_at) VALUES(?,?,?,?)"
+    ).bind('system:gmail-floor','checkpoint',String(Math.floor(initial/1000)),
+      Math.floor(Date.now()/1000)).run();
+    const row=await env.DB.prepare(
+      'SELECT data FROM states WHERE chat_id=?'
+    ).bind('system:gmail-floor').first();
+    const floor=Number(row?.data);
+    if(!Number.isSafeInteger(floor)||floor<=0)
+      throw new Error('Gmail start checkpoint invalid');
+    q='in:inbox after:'+floor+' -in:spam -in:trash';
+  }
+  if(!q)q='in:inbox newer_than:2d -in:spam -in:trash';
   let pageToken='', scanned=0, queued=0, page=0;
   while(page<4 && scanned<240 && queued<25) {
     const data=await gmailGet(token,'/messages',{q,maxResults:60,pageToken});
