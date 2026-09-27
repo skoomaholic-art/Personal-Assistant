@@ -265,6 +265,9 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
     await clearState(env,chatId);
     return {text:'Отменено. Ничего не изменено.',reply_markup:backMarkup()};
   }
+  if(current?.mode==='TASK_TARGET')return resolveTarget(env,chatId,data.intent,user);
+  if(current?.mode==='TASK_ACTION')
+    return {text:'Подтверди действие кнопкой или напиши «отмена».',reply_markup:decisionMarkup};
   let intent;
   try {
     intent=await interpret(env,chatId,user,current?
@@ -275,9 +278,6 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
     else return {text:'⚠️ Не получилось обработать сообщение. Повтори, пожалуйста. Ничего не изменено.',reply_markup:backMarkup()};
   }
   if(!intent)return null;
-  if(current?.mode==='TASK_TARGET')return resolveTarget(env,chatId,data.intent,
-    intent.target||intent.title||user);
-  if(current?.mode==='TASK_ACTION')return {text:'Подтверди действие кнопкой или напиши «отмена».',reply_markup:decisionMarkup};
   if(current && ['TASK_INPUT','TASK_DRAFT','TASK_CLARIFY'].includes(current.mode)) {
     const d=taskDraft({...data,...Object.fromEntries(
       ['title','description','due_text','due_iso','priority']
