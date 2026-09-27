@@ -239,8 +239,12 @@ export async function ingestGmailId(env, id) {
     const token=await gmailAccessToken(env);
     const raw=await gmailMessage(token,id);
     if(!isWorkGmailMessage(raw,env)) {
+      // Store only the opaque Gmail ID, not personal sender/body/subject.
+      // Otherwise every Cron tick repeatedly downloads the same personal
+      // message, wasting Gmail quota and risking unnecessary data exposure.
       await env.DB.prepare(
-        "DELETE FROM emails WHERE email_id=? AND status='ANALYZING' AND received_at=?"
+        "UPDATE emails SET status='IGNORED_NONWORK' "+
+        "WHERE email_id=? AND status='ANALYZING' AND received_at=?"
       ).bind(id,claimedAt).run();
       return {not_work:true};
     }
