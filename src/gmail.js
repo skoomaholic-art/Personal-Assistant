@@ -238,10 +238,9 @@ export async function ingestGmailId(env, id) {
   try {
     const token=await gmailAccessToken(env);
     const raw=await gmailMessage(token,id);
-    if(!isWorkGmailMessage(raw,env)) {
-      // Store only the opaque Gmail ID, not personal sender/body/subject.
-      // Otherwise every Cron tick repeatedly downloads the same personal
-      // message, wasting Gmail quota and risking unnecessary data exposure.
+    const workMail=isWorkGmailMessage(raw,env);
+    if(!workMail&&env.GMAIL_PERSONAL_INGEST_ENABLED!=='true') {
+      // Before the owner enables personal mail, do not retain its contents.
       await env.DB.prepare(
         "UPDATE emails SET status='IGNORED_NONWORK' "+
         "WHERE email_id=? AND status='ANALYZING' AND received_at=?"
@@ -259,8 +258,11 @@ export async function ingestGmailId(env, id) {
     ).bind(email.received_at,email.from_name,email.from_email,email.subject,
       analysis.summary,analysis.action,analysis.category,analysis.priority,
       analysis.deadline_text,analysis.deadline_iso,email.has_attachments?1:0,
-      analysis.needs_review?'NEEDS_REVIEW':'NEW',notify?'queued':'disabled',id,claimedAt);
-    const createTask=analysis.category!=='МУСОР' &&
+      analysis.needs_review?'NEEDS_REVIEW':workMail?'NEW':'PERSONAL',
+      notify?'queued':'disabled',id,claimedAt);
+    // Personal mail is summarized and searchable, but a personal email
+    // never creates an action item without an explicit owner request.
+    const createTask=workMail && analysis.category!=='МУСОР' &&
       !analysis.needs_review && analysis.action && analysis.action!=='Действий не требуется';
     const statements=[update];
     if(createTask) {
