@@ -3,6 +3,8 @@ import {
   menuMarkup, backMarkup, emailMarkup, taskMarkup, normalizePriority,
   isEmailObject, localDayBounds
 } from './router.js';
+import {pollGmail, ingestGmailId} from './gmail.js';
+import {runReminders} from './reminders.js';
 
 const JSON_HEADERS = {'content-type':'application/json; charset=utf-8', 'cache-control':'no-store'};
 const ok = (data, status = 200) => Response.json(data, {status, headers:JSON_HEADERS});
@@ -348,9 +350,21 @@ export default {
           const outcome=await processTelegram(msg.body,env);
           if(outcome==='busy') {msg.retry({delaySeconds:5});continue;}
         } else if(msg.body?.kind==='email') await processEmail(msg.body,env);
+        else if(msg.body?.kind==='gmail_ingest') await ingestGmailId(env,msg.body.id);
         else throw new Error('Unknown queue job');
         msg.ack();
       } catch(e){failLog('queue_job_failed',e);msg.retry({delaySeconds:5});}
+    }
+  },
+  async scheduled(controller,env,ctx) {
+    // Disabled by default. No Google account or bot token is needed for staging.
+    if(env.GMAIL_POLL_ENABLED==='true') {
+      try { const result=await pollGmail(env); console.log(JSON.stringify({event:'gmail_poll',...result})); }
+      catch(e) { failLog('gmail_poll_failed',e); throw e; }
+    }
+    if(env.REMINDERS_ENABLED==='true') {
+      try { const result=await runReminders(env); console.log(JSON.stringify({event:'reminder_tick',...result})); }
+      catch(e) { failLog('reminder_tick_failed',e); throw e; }
     }
   }
 };
