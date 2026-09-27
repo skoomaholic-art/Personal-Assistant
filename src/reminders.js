@@ -8,7 +8,7 @@ function dueMillis(value) {
 }
 export function dueReminderTasks(tasks, now=Date.now()) {
   return tasks.filter(t=>{
-    if (String(t.status)==='DONE') return false;
+    if (String(t.status)==='DONE'||String(t.status)==='DELETED') return false;
     const due=dueMillis(t.due_iso);
     return due!==null && due<=now+2*60*60*1000;
   }).sort((a,b)=>dueMillis(a.due_iso)-dueMillis(b.due_iso))
@@ -17,7 +17,7 @@ export function dueReminderTasks(tasks, now=Date.now()) {
 export function reminderText(task,now=Date.now()) {
   const due=dueMillis(task.due_iso);
   const overdue=due!==null && due<now;
-  return (overdue?'🚨 Задача просрочена':'⏰ Скоро дедлайн')+
+  return (overdue?'🚨 Срок прошёл. Как продвигается задача?':'⏰ Скоро дедлайн. Успеваешь?')+
     '\n\n'+String(task.title||'Без названия').slice(0,180)+
     '\n\nДедлайн: '+String(task.due_text||task.due_iso||'Не указан').slice(0,100);
 }
@@ -25,8 +25,12 @@ async function sendReminder(env,task,now) {
   const chat=String(env.TELEGRAM_CHAT_ID);
   const id=String(task.task_id||'');
   const buttons=id.length<48
-    ? {inline_keyboard:[[{text:'✅ Выполнено',callback_data:'task:done:'+id}],
-       [{text:'☰ Меню',callback_data:'menu'}]]}
+    ? {inline_keyboard:[
+       [{text:'✅ Выполнено',callback_data:'task:done:'+id},
+        {text:'🟡 В работе',callback_data:'task:progress:'+id}],
+       [{text:'📅 Перенести',callback_data:'task:postpone:'+id},
+        {text:'☰ Меню',callback_data:'menu'}]
+      ]}
     : {inline_keyboard:[[{text:'☰ Меню',callback_data:'menu'}]]};
   const response=await fetch('https://api.telegram.org/bot'+env.TELEGRAM_BOT_TOKEN+'/sendMessage',{
     method:'POST',headers:{'content-type':'application/json'},
@@ -44,7 +48,7 @@ export async function runReminders(env,now=Date.now()) {
     throw new Error('Reminders not configured');
   // The query is bounded; due ISO variations are normalized in dueReminderTasks.
   const res=await env.DB.prepare(
-    "SELECT task_id,title,description,status,due_iso,due_text FROM tasks WHERE status!='DONE' AND due_iso!='' ORDER BY due_iso ASC LIMIT 100"
+    "SELECT task_id,title,description,status,due_iso,due_text FROM tasks WHERE status NOT IN ('DONE','DELETED') AND due_iso!='' ORDER BY due_iso ASC LIMIT 100"
   ).all();
   const tasks=dueReminderTasks(res.results||[],now);
   let sent=0,unknown=0,skipped=0;
