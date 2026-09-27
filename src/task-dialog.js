@@ -168,9 +168,11 @@ async function confirmAction(env,chatId) {
     return {text:'Подтверждение устарело. Действие не выполнено.',reply_markup:backMarkup()};
   const data=unpack(row),name={task_done:'DONE',task_delete:'DELETED',task_progress:'IN_PROGRESS'}[data.intent];
   if(!name||!data.task_id)return {text:'Некорректное действие.',reply_markup:backMarkup()};
-  const result=await env.DB.prepare(
-    "UPDATE tasks SET status=?,updated_at=? WHERE task_id=? AND status NOT IN ('DONE','DELETED')"
-  ).bind(name,now(),data.task_id).run();
+  const allowed=name==='DELETED'?
+    "UPDATE tasks SET status=?,updated_at=? WHERE task_id=? AND status!='DELETED'":
+    "UPDATE tasks SET status=?,updated_at=? WHERE task_id=? AND status NOT IN ('DONE','DELETED')";
+  const result=await env.DB.prepare(allowed)
+    .bind(name,now(),data.task_id).run();
   await clearState(env,chatId);
   if(result.meta.changes!==1)return {text:'Задача уже изменена или не найдена.',reply_markup:backMarkup()};
   const verb={DONE:'выполнена',DELETED:'удалена из активного списка',IN_PROGRESS:'в работе'}[name];
@@ -246,7 +248,7 @@ export async function taskCallback(env,chatId,callback,updateId) {
   if(callback.startsWith('task:delete:ask:')) {
     const id=callback.slice('task:delete:ask:'.length);
     const task=await env.DB.prepare(
-      "SELECT task_id,title,status FROM tasks WHERE task_id=? AND status NOT IN ('DONE','DELETED')"
+      "SELECT task_id,title,status FROM tasks WHERE task_id=? AND status!='DELETED'"
     ).bind(id).first();
     return task?askAction(env,chatId,'task_delete',task):
       {text:'Задача не найдена или уже закрыта.',reply_markup:backMarkup()};
