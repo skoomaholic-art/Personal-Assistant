@@ -5,6 +5,7 @@ import {
 } from './router.js';
 import {pollGmail, ingestGmailId} from './gmail.js';
 import {runReminders} from './reminders.js';
+import {createDraftPreview, editDraftPreview, cancelDraftPreview, loadDraft, draftPreview} from './drafts.js';
 
 const JSON_HEADERS = {'content-type':'application/json; charset=utf-8', 'cache-control':'no-store'};
 const ok = (data, status = 200) => Response.json(data, {status, headers:JSON_HEADERS});
@@ -225,17 +226,52 @@ async function prepareAnswer(update, env) {
     await env.DB.prepare('UPDATE tasks SET status=?,updated_at=? WHERE task_id=?').bind(done?'DONE':'IN_PROGRESS',new Date().toISOString(),id).run();
     return {text:done?'✅ Отмечено выполненным.':'🟡 Отмечено «В работе».',reply_markup:backMarkup()};
   }
-  if (callback?.startsWith('email:reply:') || callback?.startsWith('senddraft:')) {
-    return {text:'Отправка почты с нового сервера пока не включена. До переноса Gmail и проверки адресатов используй прежний Apps Script. Я не отправляю письма без подтверждения.',reply_markup:backMarkup()};
+  if (callback?.startsWith('email:reply:')) {
+    if (env.REPLY_PREVIEWS_ENABLED!=='true') {
+      return {text:'Подготовка черновиков пока выключена. Отправка писем с этого сервера также выключена.',reply_markup:backMarkup()};
+    }
+    const id=callback.slice('email:reply:'.length);
+    const email=await env.DB.prepare('SELECT subject FROM emails WHERE email_id=?').bind(id).first();
+    if (!email) return {text:'Исходное письмо не найдено.',reply_markup:backMarkup()};
+    await setState(env,chatId,'REPLY_INSTRUCTION',id);
+    return {text:'Что ответить на письмо «'+safeText(email.subject,180)+'»? Напиши своими словами. Я подготовлю локальный черновик. /cancel - отмена.',reply_markup:backMarkup()};
+  }
+  if (callback?.startsWith('editdraft:')) {
+    if(env.REPLY_PREVIEWS_ENABLED!=='true') return {text:'Редактор черновиков выключен.',reply_markup:backMarkup()};
+    const id=callback.slice('editdraft:'.length);
+    const draft=await loadDraft(env,id);
+    if(!draft || draft.status!=='PREVIEW')return {text:'Черновик не найден или отменён.',reply_markup:backMarkup()};
+    await setState(env,chatId,'DRAFT_EDIT',id);
+    return {text:'Пришли новый полный текст черновика. /cancel - отмена.\n\nПисьмо не будет отправлено.',reply_markup:backMarkup()};
+  }
+  if (callback?.startsWith('canceldraft:')) {
+    if(env.REPLY_PREVIEWS_ENABLED!=='true') return {text:'Редактор черновиков выключен.',reply_markup:backMarkup()};
+    const id=callback.slice('canceldraft:'.length);
+    const cancelled=await cancelDraftPreview(env,id);
+    await clearState(env,chatId);
+    return {text:cancelled?'Локальный черновик отменён. Письмо не отправлено.':'Черновик уже отменён или не найден.',reply_markup:backMarkup()};
+  }
+  if (callback?.startsWith('senddraft:')) {
+    return {text:'Отправка email с нового сервера заблокирована. Нужно сверить оригинал Gmail, адресата, alias, тему, вложения и получить отдельное подтверждение.',reply_markup:backMarkup()};
   }
   if (callback) return {text:'Эта кнопка пока недоступна в тестовой версии.',reply_markup:backMarkup()};
   const text=String(update?.message?.text||'').trim();
   if (!text) return {text:'Пришли текстовое сообщение.',reply_markup:backMarkup()};
-  const state=await env.DB.prepare('SELECT mode FROM states WHERE chat_id=?').bind(chatId).first();
+  const state=await env.DB.prepare('SELECT mode,data FROM states WHERE chat_id=?').bind(chatId).first();
   if (state?.mode==='SEARCH') {
     await clearState(env,chatId);
     const term='%'+text.slice(0,80).toLowerCase()+'%';
     return fromRows('🔎 '+safeText(text,80),await listEmails(env,'lower(subject) LIKE ? OR lower(summary) LIKE ? OR lower(from_name) LIKE ?',[term,term,term]),'email');
+  }
+  if (state?.mode==='REPLY_INSTRUCTION' && env.REPLY_PREVIEWS_ENABLED==='true') {
+    const draft=await createDraftPreview(env,state.data,text);
+    await clearState(env,chatId);
+    return draftPreview(draft);
+  }
+  if (state?.mode==='DRAFT_EDIT' && env.REPLY_PREVIEWS_ENABLED==='true') {
+    const draft=await editDraftPreview(env,state.data,text);
+    await clearState(env,chatId);
+    return draftPreview(draft);
   }
   return await groqChat(env,chatId,text,update.update_id);
 }
