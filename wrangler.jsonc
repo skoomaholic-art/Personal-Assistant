@@ -13,7 +13,8 @@
     "WORK_EMAIL": "alexandr.petrossov@fmedia.kz",
     "GMAIL_POLL_ENABLED": "false",
     "REMINDERS_ENABLED": "false",
-    "REPLY_PREVIEWS_ENABLED": "false"
+    "REPLY_PREVIEWS_ENABLED": "false",
+    "STAGING_EXTRA_BOOTSTRAP": "true"
   },
   "d1_databases": [
     {
