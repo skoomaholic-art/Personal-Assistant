@@ -11,7 +11,7 @@ const noCache={
 };
 const response=(data,status=200,extra={})=>
   Response.json(data,{status,headers:{...noCache,...extra}});
-const challenge={'www-authenticate':'Basic realm="Персональный помощник", charset="UTF-8"'};
+const challenge={'www-authenticate':'Basic realm="Personal Assistant", charset="UTF-8"'};
 
 async function verifyGmail(env) {
   const token=await gmailAccessToken(env);
