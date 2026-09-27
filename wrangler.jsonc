@@ -18,7 +18,9 @@
     "GOOGLE_OAUTH_REDIRECT_URI": "https://rahal-mamut-staging.alexandr-petrossov.workers.dev/oauth/google/callback",
     "GOOGLE_OAUTH_SETUP_ENABLED": "false",
     "GMAIL_DRAFTS_ENABLED": "false",
-    "GMAIL_SEND_ENABLED": "false"
+    "GMAIL_SEND_ENABLED": "false",
+    "TASK_CONVERSATION_ENABLED": "true",
+    "TASK_VOICE_ENABLED": "true"
   },
   "d1_databases": [
     {
