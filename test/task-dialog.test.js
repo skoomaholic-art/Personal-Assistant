@@ -129,8 +129,8 @@ test('natural-language completion asks first, changes only the matched task',asy
   try {
     const date=new Date().toISOString();
     for(const [id,title] of [['task:one','Подготовить баннер'],['task:two','Отправить письмо']]){
-      DB.sqlite.prepare('INSERT INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) VALUES(?,NULL,?,?,?,?,"","",?,?)')
-        .run(id,title,'','NEW','средний',date,date);
+      DB.sqlite.prepare('INSERT INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) VALUES(?,NULL,?,?,?,?,?,?,?,?)')
+        .run(id,title,'','NEW','средний','','',date,date);
     }
     groq({intent:'task_done',target:'Подготовить баннер'});
     const proposed=await taskTalk(env,'owner','Баннер уже готов, закрой эту задачу',21);
@@ -146,8 +146,8 @@ test('ambiguous natural-language deletion cannot select an arbitrary task',async
   try{
     const date=new Date().toISOString();
     for(const [id,title] of [['one','Письмо Олегу'],['two','Письмо Вадиму']]){
-      DB.sqlite.prepare('INSERT INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) VALUES(?,NULL,?,?,?,?,"","",?,?)')
-        .run(id,title,'','NEW','средний',date,date);
+      DB.sqlite.prepare('INSERT INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) VALUES(?,NULL,?,?,?,?,?,?,?,?)')
+        .run(id,title,'','NEW','средний','','',date,date);
     }
     groq({intent:'task_delete',target:'письмо'});
     const reply=await taskTalk(env,'owner','Удали задачу с письмом',31);
