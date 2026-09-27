@@ -367,6 +367,25 @@ export default {
         return ok({ok:false,phase:'staging',database:'unavailable'},503);
       }
     }
+    if(request.method==='GET'&&path==='/health/features') {
+      if(!env.DB) return ok({ok:false,phase:'staging',reason:'database_unbound'},503);
+      try {
+        const names=await env.DB.prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('reminder_deliveries','reply_drafts') ORDER BY name"
+        ).all();
+        const tables=(names.results||[]).map(row=>row.name);
+        const flags={
+          gmail_poll:env.GMAIL_POLL_ENABLED==='true',
+          reminders:env.REMINDERS_ENABLED==='true',
+          reply_previews:env.REPLY_PREVIEWS_ENABLED==='true',
+          email_notifications:env.WORKER_EMAIL_NOTIFICATIONS==='true'
+        };
+        return ok({ok:true,phase:'staging',tables,flags});
+      } catch(err) {
+        failLog('feature_health_failed',err);
+        return ok({ok:false,phase:'staging',reason:'database_unavailable'},503);
+      }
+    }
     if(request.method==='POST'&&path==='/telegram/webhook') {
       try { return await webhook(request,env); }
       catch(e){ failLog('webhook_error',e);return ok({error:'temporary'},503); }
