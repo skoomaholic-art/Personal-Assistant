@@ -73,6 +73,9 @@ export async function handleRelayJoin(env,update){
   }
   const match=input.match(/^\/start(?:@[a-zA-Z0-9_]+)?\s+p([a-f0-9]{32})$/i);
   if(!match)return {handled:true,chat_id:id,text:'Этот бот представляет персонального помощника Александра. Для получения сообщений требуется приглашение. Команда /stop отключает связь.'};
+  const already=await state(env,contactPrefix+id);
+  if(already?.mode==='CONTACT')
+    return {handled:true,chat_id:id,text:'Вы уже подключены. Команда /stop отключает сообщения.'};
   const invite=await state(env,invitePrefix+match[1]);
   const data=parse(invite);
   if(invite?.mode!=='INVITE'||!data.expires_at||data.expires_at<at())
