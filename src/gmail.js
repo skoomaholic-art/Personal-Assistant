@@ -163,38 +163,83 @@ export async function analyzeGmailEmail(env,email) {
 
 export async function ingestGmailId(env, id) {
   if (env.GMAIL_POLL_ENABLED !== 'true') return {disabled:true};
-  const existing=await env.DB.prepare('SELECT email_id FROM emails WHERE email_id=?').bind(id).first();
-  if (existing) return {duplicate:true};
-  const token=await gmailAccessToken(env);
-  const raw=await gmailMessage(token,id);
-  if (!isWorkGmailMessage(raw,env)) return {not_work:true};
-  const email=normalizeGmailMessage(raw);
-  const analysis=await analyzeGmailEmail(env,email);
-  const notify=env.WORKER_EMAIL_NOTIFICATIONS==='true' && analysis.category!=='МУСОР';
-  const result=await env.DB.prepare(
-    'INSERT OR IGNORE INTO emails(email_id,received_at,from_name,from_email,subject,summary,action,category,priority,deadline_text,deadline_iso,has_attachments,status,notification_status) '+
-    'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-  ).bind(email.email_id,email.received_at,email.from_name,email.from_email,email.subject,
-    analysis.summary,analysis.action,analysis.category,analysis.priority,
-    analysis.deadline_text,analysis.deadline_iso,email.has_attachments?1:0,
-    analysis.needs_review?'NEEDS_REVIEW':'NEW',notify?'queued':'disabled').run();
-  if (result.meta.changes!==1) return {duplicate:true};
-  let task=false;
-  if (analysis.category!=='МУСОР' &&
-      !analysis.needs_review && analysis.action && analysis.action!=='Действий не требуется') {
-    const taskId='gmail:'+email.email_id;
-    const t=await env.DB.prepare(
-      'INSERT OR IGNORE INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)'
-    ).bind(taskId,email.email_id,cut(analysis.action,180),analysis.summary,'NEW',
-      analysis.priority,analysis.deadline_iso,analysis.deadline_text,nowIso(),nowIso()).run();
-    task=t.meta.changes===1;
+  if (!/^[a-zA-Z0-9_-]{4,160}$/.test(String(id))) throw new Error('Invalid Gmail message id');
+  // Claim BEFORE any external API or Groq call, so parallel Queue jobs cannot
+  // analyze the same message at the same time. The existing emails table is
+  // used as the claim ledger; status ANALYZING is never treated as a finished email.
+  const claimedAt=nowIso();
+  const claim=await env.DB.prepare(
+    "INSERT OR IGNORE INTO emails(email_id,received_at,status,notification_status) "+
+    "VALUES(?,?,'ANALYZING','disabled')"
+  ).bind(id,claimedAt).run();
+  if(claim.meta.changes!==1) {
+    const current=await env.DB.prepare('SELECT status,received_at FROM emails WHERE email_id=?').bind(id).first();
+    if (!current) return {busy:true};
+    if(current.status!=='ANALYZING') return {duplicate:true};
+    const cutoff=new Date(Date.now()-90000).toISOString();
+    // A prior worker may have crashed. Only one handler can take over a
+    // genuinely stale claim; ordinary concurrent messages back off.
+    const recovered=await env.DB.prepare(
+      "UPDATE emails SET received_at=? WHERE email_id=? AND status='ANALYZING' AND received_at<?"
+    ).bind(claimedAt,id,cutoff).run();
+    if(recovered.meta.changes!==1) return {busy:true};
   }
-  // Apps Script owns all production notifications until explicit cutover.
-  if(notify) {
-    try { await env.JOBS.send({kind:'email',email_id:email.email_id}); }
-    catch { return {stored:true,task,needs_review:analysis.needs_review,notification:'queued_for_reconciliation'}; }
+  try {
+    const token=await gmailAccessToken(env);
+    const raw=await gmailMessage(token,id);
+    if(!isWorkGmailMessage(raw,env)) {
+      await env.DB.prepare(
+        "DELETE FROM emails WHERE email_id=? AND status='ANALYZING' AND received_at=?"
+      ).bind(id,claimedAt).run();
+      return {not_work:true};
+    }
+    const email=normalizeGmailMessage(raw);
+    if(email.email_id!==id) throw new Error('Gmail message ID mismatch');
+    const analysis=await analyzeGmailEmail(env,email);
+    const notify=env.WORKER_EMAIL_NOTIFICATIONS==='true' && analysis.category!=='МУСОР';
+    const update=env.DB.prepare(
+      "UPDATE emails SET received_at=?,from_name=?,from_email=?,subject=?,summary=?,action=?,"+
+      "category=?,priority=?,deadline_text=?,deadline_iso=?,has_attachments=?,status=?,notification_status=? "+
+      "WHERE email_id=? AND status='ANALYZING' AND received_at=?"
+    ).bind(email.received_at,email.from_name,email.from_email,email.subject,
+      analysis.summary,analysis.action,analysis.category,analysis.priority,
+      analysis.deadline_text,analysis.deadline_iso,email.has_attachments?1:0,
+      analysis.needs_review?'NEEDS_REVIEW':'NEW',notify?'queued':'disabled',id,claimedAt);
+    const createTask=analysis.category!=='МУСОР' &&
+      !analysis.needs_review && analysis.action && analysis.action!=='Действий не требуется';
+    const statements=[update];
+    if(createTask) {
+      const timestamp=nowIso();
+      statements.push(env.DB.prepare(
+        'INSERT OR IGNORE INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)'
+      ).bind('gmail:'+email.email_id,email.email_id,cut(analysis.action,180),
+        analysis.summary,'NEW',analysis.priority,analysis.deadline_iso,
+        analysis.deadline_text,timestamp,timestamp));
+    }
+    // D1.batch is transactional. A failed task INSERT rolls back the email
+    // UPDATE as well: neither can be left half-committed.
+    const results=await env.DB.batch(statements);
+    if(results[0]?.meta?.changes!==1) throw new Error('Gmail claim ownership lost');
+    const task=Boolean(createTask && results[1]?.meta?.changes===1);
+    // Apps Script still owns production notifications until cutover.
+    if(notify) {
+      try { await env.JOBS.send({kind:'email',email_id:email.email_id}); }
+      catch {return {stored:true,task,needs_review:analysis.needs_review,notification:'queued_for_reconciliation'};}
+    }
+    return {stored:true,task,needs_review:analysis.needs_review};
+  } catch(error) {
+    // Release only our unfinished claim. Completed mail and another worker's
+    // later claim cannot be deleted by this handler.
+    try {
+      await env.DB.prepare(
+        "DELETE FROM emails WHERE email_id=? AND status='ANALYZING' AND received_at=?"
+      ).bind(id,claimedAt).run();
+    } catch(cleanupError) {
+      console.error(JSON.stringify({event:'gmail_claim_cleanup_failed',
+        error_type:cleanupError?.name||'Error'}));
+    }
+    throw error;
   }
-  return {stored:true,task,needs_review:analysis.needs_review};
 }
 
 export async function pollGmail(env) {
