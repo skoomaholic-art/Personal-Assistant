@@ -128,7 +128,7 @@ test('poll queues only unseen IDs and never reads full message bodies in cron',a
     throw new Error('Unexpected fetch');
   };
   const stats=await pollGmail(env);
-  assert.deepEqual(stats,{scanned:3,queued:2});
+  assert.deepEqual(stats,{scanned:3,queued:2,pending:0});
   assert.deepEqual(sent,[{kind:'gmail_ingest',id:'c1b2c3d4'},{kind:'gmail_ingest',id:'b1b2c3d4'}]);
 });
 test('malformed and forged Gmail message IDs are rejected',async()=>{
