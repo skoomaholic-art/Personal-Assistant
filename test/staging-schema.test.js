@@ -14,7 +14,7 @@ class FakeStagingDB {
   async batch(statements) {
     this.batchCalls++;
     for(const statement of statements) {
-      const match=statement.sql.match(/^CREATE TABLE IF NOT EXISTS\\s+(\\w+)/i);
+      const match=statement.sql.match(/^CREATE TABLE IF NOT EXISTS\s+(\w+)/i);
       if(match)this.tables.add(match[1]);
     }
     return statements.map(()=>({success:true}));
