@@ -125,9 +125,9 @@ export async function analyzeGmailEmail(env,email) {
       messages:[{role:'system',content:prompt},
         {role:'user',content:'От: '+email.from_name+'\nТема: '+email.subject+'\nДата: '+email.received_at+'\nТекст:\n'+email.body}],
       temperature:0.2,max_completion_tokens:750,
-      ...(String(env.GROQ_MODEL||'openai/gpt-oss-20b').match(/^openai\\/gpt-oss-(20|120)b$/)
+      ...(['openai/gpt-oss-20b','openai/gpt-oss-120b'].includes(String(env.GROQ_MODEL||'openai/gpt-oss-20b'))
         ? {reasoning_effort:'low'} : {}),
-      response_format: String(env.GROQ_MODEL||'openai/gpt-oss-20b').match(/^openai\\/gpt-oss-(20|120)b$/)
+      response_format: ['openai/gpt-oss-20b','openai/gpt-oss-120b'].includes(String(env.GROQ_MODEL||'openai/gpt-oss-20b'))
         ? {type:'json_schema',json_schema:{name:'email_analysis',strict:true,schema:{
           type:'object',
           properties:{
