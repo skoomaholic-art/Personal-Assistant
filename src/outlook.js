@@ -243,3 +243,22 @@ export async function outlookAgenda(env,days=1){
   }catch{return {text:'Не получилось загрузить рабочий календарь.',
     reply_markup:backMarkup()};}
 }
+
+export async function outlookCreateEvent(env,draft,transactionId){
+  if(env.OUTLOOK_CALENDAR_WRITE_ENABLED!=='true')
+    throw Error('Corporate calendar write access has not been authorized');
+  const start=new Date(String(draft.start_iso)),end=new Date(String(draft.end_iso));
+  if(!Number.isFinite(start.getTime())||!Number.isFinite(end.getTime())||
+    end<=start||!draft.title)throw Error('Invalid work calendar event');
+  // UTC is explicit to avoid Microsoft's regional timezone aliases and
+  // Kazakhstan UTC offset changes.
+  const event=await graph(env,'/me/events',{method:'POST',body:{
+    transactionId,subject:short(draft.title,180),
+    body:{contentType:'text',content:short(draft.description,900)},
+    start:{dateTime:start.toISOString().replace(/Z$/,''),timeZone:'UTC'},
+    end:{dateTime:end.toISOString().replace(/Z$/,''),timeZone:'UTC'},
+    location:{displayName:short(draft.location,180)},showAs:'busy'
+  }});
+  if(!event.id)throw Error('Outlook event ID missing');
+  return event;
+}
