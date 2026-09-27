@@ -1,5 +1,6 @@
 import {loadEncryptedGoogleRefreshToken} from './google-oauth.js';
 import {backMarkup,safeText,localDayBounds} from './router.js';
+import {outlookCreateEvent} from './outlook.js';
 
 const origin='https://www.googleapis.com/calendar/v3';
 const SHORT=(value,max)=>String(value??'').trim().slice(0,max);
@@ -53,7 +54,8 @@ export function calendarDraft(value){
     title:SHORT(d.title,180),description:SHORT(d.description,900),
     start_iso:Number.isFinite(startMs)?start:'',
     end_iso:Number.isFinite(endMs)&&endMs>startMs?endIso:'',
-    location:SHORT(d.location,180)
+    location:SHORT(d.location,180),
+    calendar_target:d.calendar_target==='work'?'work':'personal'
   };
 }
 export function calendarPreview(input){
@@ -64,7 +66,7 @@ export function calendarPreview(input){
     }).format(new Date(iso));}catch{return iso;}
   };
   return {text:safeText(
-    '📅 Предлагаю добавить в личный Google Calendar:\n\n'+
+    '📅 Предлагаю добавить в '+(d.calendar_target==='work'?'рабочий Outlook':'личный Google Calendar')+':\n\n'+
     'Событие: '+d.title+'\nНачало: '+show(d.start_iso)+'\nКонец: '+show(d.end_iso)+
     (d.location?'\nМесто: '+d.location:'')+
     (d.description?'\nОписание: '+d.description:'')+
@@ -100,7 +102,7 @@ export async function calendarFollowup(env,chatId,text,model){
     let old={};try{old=JSON.parse(state.data||'{}');}catch{}
     return proposeCalendar(env,chatId,{
       ...old,...Object.fromEntries(
-        ['title','description','start_iso','end_iso','location']
+        ['title','description','start_iso','end_iso','location','calendar_target']
           .filter(key=>model[key]).map(key=>[key,model[key]])
       )
     });
@@ -131,7 +133,15 @@ export async function calendarCallback(env,chatId,action){
   return null;
 }
 export async function confirmCalendar(env,chatId){
-  if(!ready(env))return {text:'Google Calendar ещё не подключён. Событие не создано. Для подключения нужен отдельный вход Google с разрешением на календарь.',reply_markup:backMarkup()};
+  const existing=await env.DB.prepare('SELECT mode,data FROM states WHERE chat_id=?')
+    .bind(stateKey(chatId)).first();
+  let target='personal';
+  try {target=JSON.parse(existing?.data||'{}')?.calendar_target==='work'?'work':'personal';}catch{}
+  if(target==='work'){
+    if(env.OUTLOOK_CALENDAR_WRITE_ENABLED!=='true')
+      return {text:'Рабочий Outlook Calendar пока не подключён с разрешения компании. Событие не создано.',reply_markup:backMarkup()};
+  }else if(!ready(env))
+    return {text:'Google Calendar ещё не подключён. Событие не создано. Для подключения нужен отдельный вход Google с разрешением на календарь.',reply_markup:backMarkup()};
   const row=await env.DB.prepare('SELECT mode,data FROM states WHERE chat_id=?')
     .bind(stateKey(chatId)).first();
   if(row?.mode!=='CALENDAR_DRAFT'&&row?.mode!=='CALENDAR_EDIT')
@@ -148,18 +158,20 @@ export async function confirmCalendar(env,chatId){
   try {
     // Setting the calendar event ID guards against duplicate creation if a
     // worker terminates and the operator later checks the outcome manually.
-    const event=await api(env,'/calendars/primary/events',{
-      method:'POST',params:{sendUpdates:'none'},
-      body:{
-        id:eventId,summary:d.title,description:d.description,location:d.location,
-        start:{dateTime:d.start_iso,timeZone:tz},
-        end:{dateTime:d.end_iso,timeZone:tz}
-      }
-    });
+    const event=target==='work'?
+      await outlookCreateEvent(env,d,eventId):
+      await api(env,'/calendars/primary/events',{
+        method:'POST',params:{sendUpdates:'none'},
+        body:{
+          id:eventId,summary:d.title,description:d.description,location:d.location,
+          start:{dateTime:d.start_iso,timeZone:tz},
+          end:{dateTime:d.end_iso,timeZone:tz}
+        }
+      });
     await saveState(env,chatId,'CALENDAR_CREATED',{
       event_id:eventId,summary:d.title,start:d.start_iso,google_event_id:event.id||eventId
     });
-    return {text:'✅ Событие добавлено в личный календарь:\n'+
+    return {text:'✅ Событие добавлено в '+(target==='work'?'рабочий':'личный')+' календарь:\n'+
       d.title+'\n'+new Intl.DateTimeFormat('ru-RU',{timeZone:tz,dateStyle:'medium',timeStyle:'short'})
         .format(new Date(d.start_iso)),reply_markup:backMarkup()};
   }catch(error){
