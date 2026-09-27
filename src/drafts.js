@@ -47,14 +47,15 @@ async function draftBody(env,email,instruction) {
   if(!body) throw new Error('Groq returned empty draft');
   return body;
 }
-export function draftButtons(id) {
+export function draftButtons(id, gmailEnabled=false) {
   return {inline_keyboard:[
+    ...(gmailEnabled?[[{text:'📨 Создать черновик Gmail',callback_data:'preparegmail:'+id}]]:[]),
     [{text:'✏️ Изменить',callback_data:'editdraft:'+id}],
     [{text:'❌ Отмена',callback_data:'canceldraft:'+id}],
     [{text:'☰ Меню',callback_data:'menu'}]
   ]};
 }
-export function draftPreview(draft) {
+export function draftPreview(draft,env={}) {
   const body=short(draft.body,2700);
   return {
     text:'✉️ Черновик ответа (НЕ отправлен)\n\n'+
@@ -63,7 +64,7 @@ export function draftPreview(draft) {
       '\n\n'+body+
       '\n\n⚠️ Только локальный черновик. Адресата, оригинальную переписку, alias и вложения '+
       'нужно проверить в Gmail перед отправкой. Отправка с этого сервера отключена.',
-    reply_markup:draftButtons(draft.draft_id)
+    reply_markup:draftButtons(draft.draft_id,env.GMAIL_DRAFTS_ENABLED==='true')
   };
 }
 export async function loadDraft(env,draftId) {
@@ -101,7 +102,7 @@ export async function editDraftPreview(env,draftId,text) {
 }
 export async function cancelDraftPreview(env,draftId) {
   const result=await env.DB.prepare(
-    "UPDATE reply_drafts SET status='CANCELLED',updated_at=? WHERE draft_id=? AND status='PREVIEW'"
+    "UPDATE reply_drafts SET status='CANCELLED',preview_token='',updated_at=? WHERE draft_id=? AND status IN ('PREVIEW','GMAIL_PREVIEWED','CHANGED','GMAIL_CREATE_UNKNOWN')"
   ).bind(new Date().toISOString(),draftId).run();
   return result.meta.changes===1;
 }
