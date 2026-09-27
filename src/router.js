@@ -43,7 +43,8 @@ export function menuMarkup() {
 }
 export function backMarkup() { return {inline_keyboard:[[{text:'☰ Меню',callback_data:'menu'}]]}; }
 export function emailMarkup(emailId) { return {inline_keyboard:[
-  [{text:'✅ В задачи',callback_data:'email:task:'+emailId}],
+  [{text:'✅ В задачи',callback_data:'email:task:'+emailId},
+   {text:'✉️ Черновик',callback_data:'email:reply:'+emailId}],
   [{text:'☰ Меню',callback_data:'menu'}]
 ]}; }
 export function taskMarkup(taskId) { return {inline_keyboard:[
