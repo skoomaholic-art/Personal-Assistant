@@ -446,7 +446,10 @@ export default {
           const outcome=await processTelegram(msg.body,env);
           if(outcome==='busy') {msg.retry({delaySeconds:5});continue;}
         } else if(msg.body?.kind==='email') await processEmail(msg.body,env);
-        else if(msg.body?.kind==='gmail_ingest') await ingestGmailId(env,msg.body.id);
+        else if(msg.body?.kind==='gmail_ingest') {
+          const outcome=await ingestGmailId(env,msg.body.id);
+          if(outcome?.busy) { msg.retry({delaySeconds:30}); continue; }
+        }
         else throw new Error('Unknown queue job');
         msg.ack();
       } catch(e){failLog('queue_job_failed',e);msg.retry({delaySeconds:5});}
