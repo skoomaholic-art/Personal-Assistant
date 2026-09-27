@@ -9,22 +9,32 @@
     "WORK_DOMAIN": "fmedia.kz",
     "TZ_OFFSET_MINUTES": "300",
     "MAIL_INGEST_ENABLED": "false",
-    "WORKER_EMAIL_NOTIFICATIONS": "false"
+    "WORKER_EMAIL_NOTIFICATIONS": "false",
+    "STAGING_SCHEMA_BOOTSTRAP": "true"
   },
-  "d1_databases": [{
-    "binding": "DB",
-    "database_name": "rahal-mamut-staging",
-    "database_id": "0b294974-73c7-40b1-93c3-dfb6dcb797e7",
-    "migrations_dir": "migrations"
-  }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rahal-mamut-staging",
+      "database_id": "0b294974-73c7-40b1-93c3-dfb6dcb797e7",
+      "migrations_dir": "migrations"
+    }
+  ],
   "queues": {
-    "producers": [{ "binding": "JOBS", "queue": "rahal-mamut-jobs" }],
-    "consumers": [{
-      "queue": "rahal-mamut-jobs",
-      "max_batch_size": 1,
-      "max_batch_timeout": 1,
-      "max_retries": 4,
-      "dead_letter_queue": "rahal-mamut-dead-letter"
-    }]
+    "producers": [
+      {
+        "binding": "JOBS",
+        "queue": "rahal-mamut-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "rahal-mamut-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 4,
+        "dead_letter_queue": "rahal-mamut-dead-letter"
+      }
+    ]
   }
 }
