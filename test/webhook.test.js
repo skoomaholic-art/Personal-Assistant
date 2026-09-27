@@ -84,3 +84,17 @@ test('no public endpoint sends email',async()=>{
   assert.equal(r.status,404);
  }
 });
+
+test('feature health is read-only and reveals no secrets',async()=>{
+ const e=env();e.GMAIL_POLL_ENABLED='false';e.REMINDERS_ENABLED='false';
+ e.REPLY_PREVIEWS_ENABLED='false';e.WORKER_EMAIL_NOTIFICATIONS='false';
+ const before=e.DB.ids.size;
+ const r=await worker.fetch(new Request('https://test.example/health/features'),e);
+ assert.equal(r.status,200);
+ const data=await r.json();
+ assert.equal(data.phase,'staging');
+ assert.deepEqual(data.tables,[]);
+ assert.deepEqual(data.flags,{gmail_poll:false,reminders:false,reply_previews:false,email_notifications:false});
+ assert.equal(e.DB.ids.size,before);
+ assert.equal(JSON.stringify(data).includes('TELEGRAM_BOT_TOKEN'),false);
+});
