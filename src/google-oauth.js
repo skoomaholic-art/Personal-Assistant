@@ -5,6 +5,8 @@ import {hasValidSecret} from './router.js';
 const SCOPES=['https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.compose'];
 const COOKIE='__Host-rahal_oauth_state';
+const CALENDAR_COOKIE='__Host-rahal_calendar_state';
+const CALENDAR_SCOPES=['openid','email','https://www.googleapis.com/auth/calendar.events'];
 const h={'cache-control':'no-store','referrer-policy':'no-referrer',
   'x-content-type-options':'nosniff',
   'content-security-policy':"default-src 'none'; base-uri 'none'; form-action 'none'"};
@@ -27,12 +29,13 @@ async function encrypt(env,token) {
     await key(env),new TextEncoder().encode(token));
   return 'v1.'+b64(iv)+'.'+b64(new Uint8Array(cipher));
 }
-export async function loadEncryptedGmailRefreshToken(env) {
+export async function loadEncryptedGoogleRefreshToken(env,provider='gmail') {
   if(!env.DB)throw Error('D1 unavailable for OAuth');
+  if(provider!=='gmail'&&provider!=='calendar')throw Error('Unknown Google connection');
   const row=await env.DB.prepare(
-    "SELECT encrypted_refresh_token FROM oauth_credentials WHERE provider='gmail'"
-  ).first();
-  if(!row?.encrypted_refresh_token)throw Error('Gmail has not been connected');
+    'SELECT encrypted_refresh_token FROM oauth_credentials WHERE provider=?'
+  ).bind(provider).first();
+  if(!row?.encrypted_refresh_token)throw Error('Google '+provider+' has not been connected');
   const [version,nonce,cipher]=row.encrypted_refresh_token.split('.');
   if(version!=='v1'||!nonce||!cipher)throw Error('OAuth token format invalid');
   try {
@@ -43,7 +46,9 @@ export async function loadEncryptedGmailRefreshToken(env) {
     return token;
   } catch {throw Error('Stored OAuth token cannot be decrypted');}
 }
+export const loadEncryptedGmailRefreshToken=env=>loadEncryptedGoogleRefreshToken(env,'gmail');
 const clearCookie=COOKIE+'=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax';
+const clearCalendarCookie=CALENDAR_COOKIE+'=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax';
 const out=(body,status=200,extra={})=>new Response(body,{status,
   headers:{...h,'content-type':'text/plain; charset=utf-8',...extra}});
 const redirect=(url,extra={})=>new Response(null,{status:302,
@@ -94,8 +99,92 @@ export async function startGoogleOAuth(request,env) {
       {'set-cookie':COOKIE+'='+state+'; Max-Age=600; Path=/; HttpOnly; Secure; SameSite=Lax'});
   }catch{return out('OAuth configuration incomplete',503);}
 }
+// The calendar uses the existing approved redirect URI, but a distinct CSRF
+// cookie and a separate encrypted D1 credential. Gmail tokens stay untouched.
+export async function startCalendarOAuth(request,env) {
+  if(request.method!=='GET')return out('Method not allowed',405);
+  if(env.GOOGLE_CALENDAR_SETUP_ENABLED!=='true'||
+    !env.DB||!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)
+    return out('Calendar pairing is disabled',503);
+  if(!ownerAuthorized(request,env))return out('Owner authentication required',401,
+    {'www-authenticate':'Basic realm="Personal Assistant", charset="UTF-8"'});
+  try {
+    await key(env);
+    const state=b64(crypto.getRandomValues(new Uint8Array(32)));
+    const args=new URLSearchParams({
+      client_id:env.GOOGLE_CLIENT_ID,
+      redirect_uri:redirectUri(request,env),
+      response_type:'code',scope:CALENDAR_SCOPES.join(' '),
+      access_type:'offline',prompt:'consent',state
+    });
+    return redirect('https://accounts.google.com/o/oauth2/v2/auth?'+args.toString(),
+      {'set-cookie':CALENDAR_COOKIE+'='+state+
+        '; Max-Age=600; Path=/; HttpOnly; Secure; SameSite=Lax'});
+  } catch{return out('Calendar OAuth configuration incomplete',503);}
+}
+async function completeCalendarOAuth(request,env) {
+  if(env.GOOGLE_CALENDAR_SETUP_ENABLED!=='true')return out('Calendar pairing disabled',503);
+  const url=new URL(request.url);
+  const state=url.searchParams.get('state')||'';
+  const cookie=request.headers.get('cookie')||'';
+  const saved=cookie.match(/(?:^|;\\s*)__Host-rahal_calendar_state=([a-zA-Z0-9_-]{20,100})(?:;|$)/)?.[1]||'';
+  if(!state||!saved||!hasValidSecret(state,saved))
+    return out('Expired or invalid calendar pairing state',400,{'set-cookie':clearCalendarCookie});
+  if(url.searchParams.has('error'))return out('Google calendar authorization cancelled',400,
+    {'set-cookie':clearCalendarCookie});
+  const code=url.searchParams.get('code')||'';
+  if(!code||code.length>2048)return out('Invalid Google authorization code',400,
+    {'set-cookie':clearCalendarCookie});
+  try {
+    const body=new URLSearchParams({
+      client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,
+      redirect_uri:redirectUri(request,env),grant_type:'authorization_code',code
+    });
+    const tokenResponse=await fetch('https://oauth2.googleapis.com/token',{
+      method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},
+      body,signal:AbortSignal.timeout(10000)
+    });
+    if(!tokenResponse.ok)throw Error('Calendar OAuth exchange failed');
+    const tokens=await tokenResponse.json();
+    if(!tokens.access_token||!tokens.refresh_token)throw Error('Offline calendar token missing');
+    const granted=String(tokens.scope||'').split(/\\s+/);
+    if(!granted.includes('https://www.googleapis.com/auth/calendar.events'))
+      throw Error('Calendar events permission missing');
+    const profile=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{
+      headers:{authorization:'Bearer '+tokens.access_token},
+      signal:AbortSignal.timeout(10000)
+    });
+    if(!profile.ok)throw Error('Google account verification failed');
+    const user=await profile.json();
+    const account=String(user.email||'').toLowerCase();
+    const gmail=await env.DB.prepare(
+      "SELECT account_email FROM oauth_credentials WHERE provider='gmail'"
+    ).first();
+    if(!account||!gmail?.account_email||
+      account!==String(gmail.account_email).toLowerCase())
+      throw Error('Calendar and personal Gmail must belong to the same account');
+    const encrypted=await encrypt(env,tokens.refresh_token);
+    await env.DB.prepare(
+      "INSERT INTO oauth_credentials(provider,encrypted_refresh_token,account_email,granted_scopes,updated_at) "+
+      "VALUES('calendar',?,?,?,?) ON CONFLICT(provider) DO UPDATE SET "+
+      "encrypted_refresh_token=excluded.encrypted_refresh_token,"+
+      "account_email=excluded.account_email,granted_scopes=excluded.granted_scopes,"+
+      "updated_at=excluded.updated_at"
+    ).bind(encrypted,account,granted.join(' '),new Date().toISOString()).run();
+    return out('Google Calendar connected: '+account+
+      '. Gmail connection was not changed. No calendar event was created.',
+      200,{'set-cookie':clearCalendarCookie});
+  }catch{return out('Calendar pairing failed. Confirm account and permissions.',503,
+    {'set-cookie':clearCalendarCookie});}
+}
 export async function completeGoogleOAuth(request,env) {
   if(request.method!=='GET')return out('Method not allowed',405,{'set-cookie':clearCookie});
+  const url=new URL(request.url),state=url.searchParams.get('state')||'';
+  const calendarCookie=request.headers.get('cookie')?.match(
+    /(?:^|;\\s*)__Host-rahal_calendar_state=([a-zA-Z0-9_-]{20,100})(?:;|$)/
+  )?.[1]||'';
+  if(calendarCookie&&state&&hasValidSecret(state,calendarCookie))
+    return completeCalendarOAuth(request,env);
   if(!enabled(env))return out('Pairing disabled',503,{'set-cookie':clearCookie});
   const url=new URL(request.url);
   const state=url.searchParams.get('state')||'',cookie=cookieState(request);
