@@ -1,4 +1,4 @@
-import {gmailAccessToken} from './gmail.js';
+import {gmailAccessToken,gmailMessage,gmailHeaders,normalizeGmailMessage} from './gmail.js';
 import {buildReplyMime} from './gmail-compose.js';
 import {backMarkup,safeText} from './router.js';
 
@@ -69,9 +69,35 @@ export async function draftPersonalMail(env,chatId,input){
   const body=originalBody||await generateBody(env,{...input,to,subject});
   if(!body)return {text:'Не хватает текста письма. Расскажи, что нужно написать.',
     reply_markup:backMarkup(),needs_clarification:true};
-  const draft={from,to,subject,body,created_at:Date.now(),source:'personal_gmail'};
+  const draft={from,to,subject,body,created_at:Date.now(),
+    source:'personal_gmail',reply_to_id:cut(input.reply_to_id,150)};
   await put(env,chatId,'PERSONAL_MAIL_DRAFT',draft);
   return preview(draft);
+}
+// Replies are drafted against the owner's actual Gmail message, never
+// against unverified forwarded text or an Outlook message not in Gmail.
+export async function draftPersonalReply(env,chatId,messageId,instruction){
+  const id=cut(messageId,150);
+  if(!/^[a-zA-Z0-9_-]{5,150}$/.test(id))
+    return {text:'Некорректный идентификатор письма.',reply_markup:backMarkup()};
+  const email=await env.DB.prepare(
+    "SELECT email_id,from_email,from_name,subject,summary,action,status FROM emails "+
+    "WHERE email_id=? AND status NOT IN ('ANALYZING','IGNORED_NONWORK','WORK_OUTLOOK')"
+  ).bind(id).first();
+  if(!email||!address(email.from_email))
+    return {text:'Не могу найти исходное письмо Gmail. Ничего не отправлено.',
+      reply_markup:backMarkup()};
+  if(!cut(instruction,1200))
+    return {text:'Что нужно ответить? Напиши своими словами.',reply_markup:backMarkup()};
+  const subject=/^re:/i.test(email.subject||'')?
+    cut(email.subject,280):'Re: '+cut(email.subject||'Без темы',270);
+  return draftPersonalMail(env,chatId,{
+    to:email.from_email,subject,reply_to_id:id,
+    instruction:'Исходное письмо от '+cut(email.from_name,120)+
+      '. Краткая сводка: '+cut(email.summary,850)+
+      '. Контекст: '+cut(email.action,350)+
+      '. Инструкция Александра: '+cut(instruction,1150)
+  });
 }
 export async function mailCallback(env,chatId,action){
   const row=await current(env,chatId);
@@ -125,9 +151,24 @@ export async function confirmPersonalMail(env,chatId){
     Date.now()-Number(d.created_at)>30*60*1000)
     return {text:'Черновик устарел или аккаунт изменился. Письмо не отправлено.',
       reply_markup:backMarkup()};
-  // Construct the exact MIME body before claiming delivery.
+  // Read and bind the original Gmail thread before the one-way send claim.
+  // An Outlook message cannot be replied to through the personal Gmail API.
+  const access=await gmailAccessToken(env);
+  let messageId='',refs='',threadId='';
+  if(d.reply_to_id){
+    const source=await gmailMessage(access,d.reply_to_id);
+    const senderAddress=normalizeGmailMessage(source).from_email;
+    if(address(senderAddress)!==address(d.to))
+      return {text:'Адрес отправителя исходного письма изменился. Ничего не отправлено.',
+        reply_markup:backMarkup()};
+    const headers=gmailHeaders(source);
+    messageId=cut(headers['message-id'],300);
+    refs=cut(headers.references,750);
+    threadId=cut(source.threadId,160);
+    if(!/^[a-zA-Z0-9_-]{5,160}$/.test(threadId))threadId='';
+  }
   const raw=buildReplyMime({from,to:d.to,subject:d.subject,body:d.body,
-    originalMessageId:'',references:''});
+    originalMessageId:messageId,references:refs});
   const claim=await env.DB.prepare(
     "UPDATE states SET mode='PERSONAL_MAIL_SENDING',updated_at=? "+
     "WHERE chat_id=? AND mode='PERSONAL_MAIL_DRAFT'"
@@ -135,10 +176,11 @@ export async function confirmPersonalMail(env,chatId){
   if(claim.meta.changes!==1)
     return {text:'Письмо уже обрабатывается. Не отправляй его повторно.',reply_markup:backMarkup()};
   try {
-    const access=await gmailAccessToken(env);
     const result=await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',{
       method:'POST',headers:{authorization:'Bearer '+access,
-        'content-type':'application/json'},body:JSON.stringify({raw}),
+        'content-type':'application/json'},body:JSON.stringify({
+        raw,...(threadId?{threadId}:{})
+      }),
       signal:AbortSignal.timeout(12000)
     });
     if(!result.ok)throw Error('Gmail send HTTP '+result.status);
