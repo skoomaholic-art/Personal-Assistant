@@ -12,6 +12,7 @@ import {calendarAgenda,calendarCallback} from './calendar.js';
 import {mailCallback,mailFollowup} from './personal-mail.js';
 import {relayCallback,relayFollowup,handleRelayJoin,listRelayContacts} from './telegram-relay.js';
 import {memoryCallback,showMemory} from './memory.js';
+import {dailyBriefPreview,runDailyBrief} from './brief.js';
 import {connectionStatus} from './admin.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
@@ -264,6 +265,7 @@ async function prepareAnswer(update, env) {
   }
   if(action==='contacts')return listRelayContacts(env);
   if(action==='memory')return showMemory(env,chatId);
+  if(action==='brief')return dailyBriefPreview(env);
   if (action==='mail') {
     if(env.GMAIL_POLL_ENABLED!=='true')
       return {text:'Проверка Gmail сейчас выключена.',reply_markup:backMarkup()};
@@ -321,7 +323,8 @@ async function prepareAnswer(update, env) {
   if(callback?.startsWith('memory:'))return memoryCallback(env,chatId,callback);
   if(callback && (callback==='task:new:save'||callback==='task:new:change'||
      callback==='task:new:cancel'||callback==='task:action:yes'||
-     callback==='task:action:no'||callback.startsWith('task:delete:ask:')))
+     callback==='task:action:no'||callback.startsWith('task:delete:ask:')||
+     callback.startsWith('task:postpone:')))
     return taskCallback(env,chatId,callback,update.update_id);
   if (callback?.startsWith('task:view:')) {
     const t=await env.DB.prepare("SELECT task_id,title,description,status,priority,due_text FROM tasks WHERE task_id=? AND status!='DELETED'").bind(callback.slice(10)).first();
@@ -586,6 +589,10 @@ export default {
     if(env.REMINDERS_ENABLED==='true') {
       try { const result=await runReminders(env); console.log(JSON.stringify({event:'reminder_tick',...result})); }
       catch(e) { failLog('reminder_tick_failed',e); throw e; }
+    }
+    if(env.DAILY_BRIEF_ENABLED==='true') {
+      try { const result=await runDailyBrief(env); console.log(JSON.stringify({event:'daily_brief',...result})); }
+      catch(e) { failLog('daily_brief_failed',e); }
     }
   }
 };
