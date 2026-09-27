@@ -124,6 +124,21 @@ test('task deletion is a reversible soft-delete and requires explicit confirmati
     assert.match((await taskCallback(env,'owner','task:action:yes',5)).text,/устарело/);
   }finally{DB.close();}
 });
+test('completed tasks can also be deleted, but only after a second click',async()=>{
+  const {env,DB}=setup();
+  try {
+    const date=new Date().toISOString();
+    DB.sqlite.prepare(
+      "INSERT INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) "+
+      "VALUES('finished:1',NULL,'Завершённая задача','','DONE','средний','','',?,?)"
+    ).run(date,date);
+    const ask=await taskCallback(env,'owner','task:delete:ask:finished:1',1);
+    assert.match(ask.text,/Подтверд/);
+    assert.equal(DB.sqlite.prepare("SELECT status FROM tasks WHERE task_id='finished:1'").get().status,'DONE');
+    await taskCallback(env,'owner','task:action:yes',2);
+    assert.equal(DB.sqlite.prepare("SELECT status FROM tasks WHERE task_id='finished:1'").get().status,'DELETED');
+  }finally{DB.close();}
+});
 test('natural-language completion asks first, changes only the matched task',async()=>{
   const {env,DB}=setup();
   try {
