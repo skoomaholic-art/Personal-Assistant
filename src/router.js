@@ -9,7 +9,9 @@ export function commandOf(update) {
     '/cancel': 'cancel', 'отмена': 'cancel', '/reset': 'reset',
     '/today': 'today', '/week': 'week', '/important': 'important',
     '/news': 'news', '/colleagues': 'colleagues', '/search': 'search',
-    '/tasks': 'tasks', '/report': 'report', '/new': 'newtask', '/mail': 'mail'
+    '/tasks': 'tasks', '/report': 'report', '/new': 'newtask', '/mail': 'mail',
+    '/calendar': 'calendar', '/compose': 'compose', '/contacts': 'contacts',
+    '/memory': 'memory', '/brief': 'brief'
   };
   if (exact[lower]) return exact[lower];
   if (lower.includes('что важного')) return 'important';
@@ -43,9 +45,11 @@ export function menuMarkup() {
   return {inline_keyboard: [
     [{text:'🔥 Важное',callback_data:'important'},{text:'✅ Сегодня',callback_data:'today'}],
     [{text:'📅 Неделя',callback_data:'week'},{text:'📋 Задачи',callback_data:'tasks'}],
+    [{text:'🗓 Календарь',callback_data:'calendar'},{text:'✉️ Написать',callback_data:'compose'}],
     [{text:'📰 Новости',callback_data:'news'},{text:'👥 Коллеги',callback_data:'colleagues'}],
     [{text:'🔎 Поиск',callback_data:'search'},{text:'📊 Отчёт',callback_data:'report'}],
     [{text:'📨 Почта',callback_data:'mail'},{text:'➕ Задача',callback_data:'newtask'}],
+    [{text:'🧠 Память',callback_data:'memory'},{text:'👥 Контакты',callback_data:'contacts'}],
     [{text:'🎙 Голосом',callback_data:'voicehelp'},{text:'🧹 Очистить чат',callback_data:'reset'}]
   ]};
 }
