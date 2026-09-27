@@ -47,6 +47,35 @@ export async function connectionStatus(request,env) {
   if(!ownerAuthorized(request,env))
     return response({error:'owner_auth_required'},401,challenge);
   const checks=await Promise.allSettled([verifyGmail(env),verifyGroq(env)]);
+  let mailbox={work_emails:0,ignored_personal:0,tasks:0,last_poll:null};
+  try {
+    const [counts,tasks,poll]=await Promise.all([
+      env.DB.prepare(
+        "SELECT COUNT(CASE WHEN status NOT IN ('ANALYZING','IGNORED_NONWORK') THEN 1 END) AS work_emails, "+
+        "COUNT(CASE WHEN status='IGNORED_NONWORK' THEN 1 END) AS ignored_personal FROM emails"
+      ).first(),
+      env.DB.prepare("SELECT COUNT(*) AS tasks FROM tasks").first(),
+      env.DB.prepare("SELECT mode,data,updated_at FROM states WHERE chat_id=?")
+        .bind('system:gmail-poll').first()
+    ]);
+    let lastPoll=null;
+    if(poll) {
+      let stats={};
+      try{stats=JSON.parse(poll.data||'{}');}catch{stats={};}
+      lastPoll={
+        status:poll.mode,
+        at:new Date(Number(poll.updated_at)*1000).toISOString(),
+        scanned:Number(stats.scanned||0),
+        queued:Number(stats.queued||0)
+      };
+    }
+    mailbox={
+      work_emails:Number(counts?.work_emails||0),
+      ignored_personal:Number(counts?.ignored_personal||0),
+      tasks:Number(tasks?.tasks||0),
+      last_poll:lastPoll
+    };
+  } catch { mailbox={status:'database_unavailable'}; }
   // Do not reveal internal error details or sensitive Google account data
   // in failure responses. The owner only needs per-provider health.
   const google=checks[0].status==='fulfilled'
@@ -56,7 +85,7 @@ export async function connectionStatus(request,env) {
   return response({
     ok:Boolean(google.ok&&groq.ok),
     service:'Персональный помощник',phase:'staging',
-    google,groq,
+    google,groq,mailbox,
     mail_poll_enabled:env.GMAIL_POLL_ENABLED==='true',
     mail_notifications_enabled:env.WORKER_EMAIL_NOTIFICATIONS==='true',
     email_send_enabled:env.GMAIL_SEND_ENABLED==='true'
