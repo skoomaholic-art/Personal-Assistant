@@ -1,6 +1,8 @@
 // Gmail read-only adapter for the existing personal assistant.
 // Source behavior: preserve work-mail filtering, AI summaries, task creation,
 // durable Gmail message-id deduplication. Do not send mail or modify Gmail.
+import {loadEncryptedGmailRefreshToken} from './google-oauth.js';
+
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const categories = new Set(['ЗАДАЧА','ВАЖНО','НОВОСТЬ','FYI','ВСТРЕЧА','ДОКУМЕНТ','ПИСЬМО','МУСОР']);
 const priorities = new Set(['высокий','средний','низкий']);
@@ -8,12 +10,16 @@ const cut = (s, n) => String(s ?? '').slice(0,n);
 const nowIso = () => new Date().toISOString();
 
 export async function gmailAccessToken(env) {
-  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GMAIL_REFRESH_TOKEN)
-    throw new Error('Gmail OAuth secrets not configured');
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET)
+    throw new Error('Gmail OAuth client not configured');
+  // A manually provisioned Cloudflare Secret is supported, but the owner can
+  // alternatively complete the guarded Google consent flow once and keep the
+  // AES-GCM encrypted refresh token in D1.
+  const refresh=env.GMAIL_REFRESH_TOKEN || await loadEncryptedGmailRefreshToken(env);
   const body = new URLSearchParams({
     client_id:env.GOOGLE_CLIENT_ID,
     client_secret:env.GOOGLE_CLIENT_SECRET,
-    refresh_token:env.GMAIL_REFRESH_TOKEN,
+    refresh_token:refresh,
     grant_type:'refresh_token'
   });
   const response = await fetch('https://oauth2.googleapis.com/token', {
