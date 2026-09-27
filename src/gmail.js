@@ -89,6 +89,7 @@ function walkParts(part,out) {
 export function normalizeGmailMessage(message) {
   const h=gmailHeaders(message), collected={body:'',attachments:[]};
   walkParts(message?.payload,collected);
+  const manifest=gmailAttachmentManifest(message);
   const received=Number(message?.internalDate);
   const at=Number.isFinite(received) && received>0 ? new Date(received) : new Date();
   // Gmail may omit text/plain on HTML-only messages; use the short snippet.
@@ -99,8 +100,9 @@ export function normalizeGmailMessage(message) {
     received_at:at.toISOString(), from_name:cut(h.from,250),
     from_email:addresses(h.from)[0] || '', to_line:cut(h.to,350),
     subject:cut(h.subject || 'Без темы',500), body,
-    has_attachments:collected.attachments.length>0,
-    attachment_names:collected.attachments
+    has_attachments:manifest.length>0,
+    attachment_names:manifest.map(file=>file.name),
+    attachment_manifest:manifest
   };
 }
 
