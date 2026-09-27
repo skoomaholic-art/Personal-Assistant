@@ -143,3 +143,70 @@ async function gmailMessageTokenless(id) {
   const {gmailMessage}=await import('../src/gmail.js');
   return gmailMessage('token',id);
 }
+
+test('parallel Gmail workers start only one OAuth/Groq analysis for the same id',async()=>{
+ const db=new Db();
+ const env={GMAIL_POLL_ENABLED:'true',WORK_EMAIL:'worker@work.example',WORK_DOMAIN:'work.example',
+   GOOGLE_CLIENT_ID:'client',GOOGLE_CLIENT_SECRET:'secret',GMAIL_REFRESH_TOKEN:'refresh',
+   GROQ_API_KEY:'groq',DB:db};
+ let releaseToken,announceToken,oauthCalls=0,groqCalls=0;
+ const waiting=new Promise(resolve=>{releaseToken=resolve;});
+ const entered=new Promise(resolve=>{announceToken=resolve;});
+ global.fetch=async url=>{
+   const u=String(url);
+   if(u.includes('oauth2.googleapis.com/token')){
+     oauthCalls++;
+     announceToken();
+     await waiting;
+     return Response.json({access_token:'fake-token'});
+   }
+   if(u.includes('/messages/a1b2c3d4'))return Response.json(sampleMail());
+   if(u.includes('api.groq.com')){
+     groqCalls++;
+     return Response.json({choices:[{message:{content:JSON.stringify({
+       category:'ЗАДАЧА',priority:'высокий',summary:'Review the document',
+       action:'Check the document',deadline_text:'Не указан',deadline_iso:''
+     })}}]});
+   }
+   throw Error('Unexpected URL');
+ };
+ const first=ingestGmailId(env,'a1b2c3d4');
+ await entered;
+ const parallel=await ingestGmailId(env,'a1b2c3d4');
+ assert.deepEqual(parallel,{busy:true});
+ assert.equal(oauthCalls,1);
+ assert.equal(groqCalls,0);
+ releaseToken();
+ assert.deepEqual(await first,{stored:true,task:true,needs_review:false});
+ assert.equal(groqCalls,1);
+ assert.deepEqual(await ingestGmailId(env,'a1b2c3d4'),{duplicate:true});
+ assert.equal(db.mail.size,1);
+ assert.equal(db.tasks.size,1);
+});
+
+test('failed task insert rolls back email; retry can persist both together',async()=>{
+ const db=new Db();
+ const env={GMAIL_POLL_ENABLED:'true',WORK_EMAIL:'worker@work.example',WORK_DOMAIN:'work.example',
+   GOOGLE_CLIENT_ID:'client',GOOGLE_CLIENT_SECRET:'secret',GMAIL_REFRESH_TOKEN:'refresh',
+   GROQ_API_KEY:'groq',DB:db};
+ global.fetch=async url=>{
+   if(String(url).includes('oauth2.googleapis.com/token'))return Response.json({access_token:'fake-token'});
+   if(String(url).includes('/messages/a1b2c3d4'))return Response.json(sampleMail());
+   if(String(url).includes('api.groq.com'))return Response.json({
+     choices:[{message:{content:JSON.stringify({
+       category:'ЗАДАЧА',priority:'высокий',summary:'Create task',
+       action:'Check document',deadline_text:'Не указан',deadline_iso:''
+     })}}]
+   });
+   throw Error('Unexpected URL');
+ };
+ const original=db.batch.bind(db);
+ db.batch=async statements=>original([...statements,db.prepare('INSERT INTO missing_table VALUES(1)')]);
+ await assert.rejects(ingestGmailId(env,'a1b2c3d4'),/no such table/);
+ assert.equal(db.mail.size,0);
+ assert.equal(db.tasks.size,0);
+ db.batch=original;
+ assert.deepEqual(await ingestGmailId(env,'a1b2c3d4'),{stored:true,task:true,needs_review:false});
+ assert.equal(db.mail.size,1);
+ assert.equal(db.tasks.size,1);
+});
