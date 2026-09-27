@@ -9,7 +9,7 @@ import {createDraftPreview, editDraftPreview, cancelDraftPreview, loadDraft, dra
 import {prepareGmailDraft, gmailSendPreview, confirmGmailSend} from './gmail-compose.js';
 import {startGoogleOAuth,completeGoogleOAuth,startCalendarOAuth} from './google-oauth.js';
 import {calendarAgenda,calendarCallback} from './calendar.js';
-import {mailCallback,mailFollowup} from './personal-mail.js';
+import {mailCallback,mailFollowup,draftPersonalReply} from './personal-mail.js';
 import {relayCallback,relayFollowup,handleRelayJoin,listRelayContacts} from './telegram-relay.js';
 import {memoryCallback,showMemory} from './memory.js';
 import {dailyBriefPreview,runDailyBrief} from './brief.js';
@@ -341,6 +341,19 @@ async function prepareAnswer(update, env) {
       'Задача уже закрыта или удалена.',reply_markup:backMarkup()};
   }
   if (callback?.startsWith('email:reply:')) {
+    if(env.PERSONAL_GMAIL_SEND_ENABLED==='true'){
+      const id=callback.slice('email:reply:'.length);
+      const mail=await env.DB.prepare(
+        "SELECT subject,status FROM emails WHERE email_id=?"
+      ).bind(id).first();
+      if(!mail||['WORK_OUTLOOK','ANALYZING','IGNORED_NONWORK'].includes(mail.status))
+        return {text:'Это письмо нельзя открыть как ответ из личного Gmail.',
+          reply_markup:backMarkup()};
+      await setState(env,chatId,'PERSONAL_REPLY_INSTRUCTION',id);
+      return {text:'✉️ Что ответить на письмо «'+safeText(mail.subject,180)+'»? '+
+        'Сначала покажу полный черновик с адресом получателя. Ничего не отправлю до твоего подтверждения.',
+        reply_markup:backMarkup()};
+    }
     if (env.REPLY_PREVIEWS_ENABLED!=='true') {
       return {text:'Подготовка черновиков пока выключена. Отправка писем с этого сервера также выключена.',reply_markup:backMarkup()};
     }
@@ -398,6 +411,13 @@ async function prepareAnswer(update, env) {
   if(['RELAY_DRAFT','RELAY_EDIT'].includes(state?.mode)){
     const result=await relayFollowup(env,chatId,text);
     if(result)return result;
+  }
+  if(state?.mode==='PERSONAL_REPLY_INSTRUCTION'){
+    const draft=await draftPersonalReply(env,chatId,state.data,text);
+    if(!draft.needs_clarification)await env.DB.prepare(
+      "DELETE FROM states WHERE chat_id=? AND mode='PERSONAL_REPLY_INSTRUCTION'"
+    ).bind(chatId).run();
+    return draft;
   }
   if (state?.mode==='SEARCH') {
     await clearState(env,chatId);
