@@ -106,7 +106,7 @@ test('work mail is stored once and its task ID is stable across retries',async()
   assert.ok(db.tasks.has('gmail:a1b2c3d4'));
   assert.equal(calls.filter(x=>x.includes('oauth2.googleapis.com')).length,1);
 });
-test('unrelated personal email is never stored or sent to Groq',async()=>{
+test('unrelated personal email stores only an ID marker and never goes to Groq',async()=>{
   const db=new Db(),calls=[];
   const env={GMAIL_POLL_ENABLED:'true',WORK_EMAIL:'worker@work.example',WORK_DOMAIN:'work.example',
     GOOGLE_CLIENT_ID:'client',GOOGLE_CLIENT_SECRET:'secret',GMAIL_REFRESH_TOKEN:'refresh',
@@ -117,7 +117,13 @@ test('unrelated personal email is never stored or sent to Groq',async()=>{
     return Response.json(sampleMail({from:'person@personal.example',to:'friend@personal.example'}));
   };
   assert.deepEqual(await ingestGmailId(env,'a1b2c3d4'),{not_work:true});
-  assert.equal(db.mail.size,0);
+  assert.equal(db.mail.size,1);
+  const ignored=db.sqlite.prepare('SELECT status,from_email,subject,summary FROM emails WHERE email_id=?').get('a1b2c3d4');
+  assert.equal(ignored.status,'IGNORED_NONWORK');
+  assert.equal(ignored.from_email,'');
+  assert.equal(ignored.subject,'');
+  assert.equal(ignored.summary,'');
+  assert.deepEqual(await ingestGmailId(env,'a1b2c3d4'),{duplicate:true});
   assert.equal(calls.some(x=>x.includes('groq.com')),false);
 });
 test('poll queues only unseen IDs and never reads full message bodies in cron',async()=>{
