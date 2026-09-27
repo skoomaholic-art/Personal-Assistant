@@ -127,7 +127,7 @@ async function completeCalendarOAuth(request,env) {
   const url=new URL(request.url);
   const state=url.searchParams.get('state')||'';
   const cookie=request.headers.get('cookie')||'';
-  const saved=cookie.match(/(?:^|;\\s*)__Host-rahal_calendar_state=([a-zA-Z0-9_-]{20,100})(?:;|$)/)?.[1]||'';
+  const saved=cookie.match(/(?:^|;\s*)__Host-rahal_calendar_state=([a-zA-Z0-9_-]{20,100})(?:;|$)/)?.[1]||'';
   if(!state||!saved||!hasValidSecret(state,saved))
     return out('Expired or invalid calendar pairing state',400,{'set-cookie':clearCalendarCookie});
   if(url.searchParams.has('error'))return out('Google calendar authorization cancelled',400,
@@ -147,7 +147,7 @@ async function completeCalendarOAuth(request,env) {
     if(!tokenResponse.ok)throw Error('Calendar OAuth exchange failed');
     const tokens=await tokenResponse.json();
     if(!tokens.access_token||!tokens.refresh_token)throw Error('Offline calendar token missing');
-    const granted=String(tokens.scope||'').split(/\\s+/);
+    const granted=String(tokens.scope||'').split(/\s+/);
     if(!granted.includes('https://www.googleapis.com/auth/calendar.events'))
       throw Error('Calendar events permission missing');
     const profile=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{
@@ -181,13 +181,12 @@ export async function completeGoogleOAuth(request,env) {
   if(request.method!=='GET')return out('Method not allowed',405,{'set-cookie':clearCookie});
   const url=new URL(request.url),state=url.searchParams.get('state')||'';
   const calendarCookie=request.headers.get('cookie')?.match(
-    /(?:^|;\\s*)__Host-rahal_calendar_state=([a-zA-Z0-9_-]{20,100})(?:;|$)/
+    /(?:^|;\s*)__Host-rahal_calendar_state=([a-zA-Z0-9_-]{20,100})(?:;|$)/
   )?.[1]||'';
   if(calendarCookie&&state&&hasValidSecret(state,calendarCookie))
     return completeCalendarOAuth(request,env);
   if(!enabled(env))return out('Pairing disabled',503,{'set-cookie':clearCookie});
-  const url=new URL(request.url);
-  const state=url.searchParams.get('state')||'',cookie=cookieState(request);
+  const cookie=cookieState(request);
   if(url.searchParams.has('error'))return out('Google authorization cancelled',400,{'set-cookie':clearCookie});
   if(!state||!cookie||!hasValidSecret(state,cookie))
     return out('Expired or invalid browser state',400,{'set-cookie':clearCookie});
