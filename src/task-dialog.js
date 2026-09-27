@@ -1,5 +1,5 @@
 import {backMarkup,taskMarkup,safeText,normalizePriority} from './router.js';
-import {proposeCalendar,calendarAgenda} from './calendar.js';
+import {proposeCalendar,calendarAgenda,calendarFollowup} from './calendar.js';
 import {draftPersonalMail} from './personal-mail.js';
 import {proposeRelay,inviteRelayContact,listRelayContacts} from './telegram-relay.js';
 import {proposeMemory,showMemory,forgetMemory,personalMemory} from './memory.js';
@@ -287,6 +287,19 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
   if(current && /^(нет|отмена|не надо|отмени)$/i.test(user)) {
     await clearState(env,chatId);
     return {text:'Отменено. Ничего не изменено.',reply_markup:backMarkup()};
+  }
+  if(prev?.mode==='CALENDAR_DRAFT'||prev?.mode==='CALENDAR_EDIT'){
+    if(/^(отмена|нет|не надо|отмени)$/i.test(user)||
+       /^(да|подтверждаю|добавь|сохрани|ок|окей)$/i.test(user))
+      return calendarFollowup(env,chatId,user);
+    try {
+      const event=await interpret(env,chatId,user,{
+        mode:prev.mode,previous:unpack(prev),
+        instruction:'Измени существующее событие по словам владельца. Намерение create_event.'
+      });
+      return calendarFollowup(env,chatId,user,event);
+    }catch{return {text:'Не понял изменение. Уточни дату, время или название события.',
+      reply_markup:backMarkup()};}
   }
   if(current?.mode==='TASK_TARGET')return resolveTarget(env,chatId,data.intent,user);
   if(current?.mode==='TASK_ACTION')
