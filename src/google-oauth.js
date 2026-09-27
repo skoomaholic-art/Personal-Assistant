@@ -57,7 +57,7 @@ function redirectUri(request,env) {
     throw Error('OAuth redirect URI does not match this Worker');
   return url.href;
 }
-function authorized(request,env) {
+export function ownerAuthorized(request,env) {
   if(!env.SETUP_PASSWORD||env.SETUP_PASSWORD.length<24)return false;
   const auth=request.headers.get('authorization')||'';
   if(!auth.startsWith('Basic '))return false;
@@ -78,9 +78,9 @@ function enabled(env) {
 export async function startGoogleOAuth(request,env) {
   if(request.method!=='GET')return out('Method not allowed',405);
   if(!enabled(env))return out('Google pairing is disabled',503);
-  if(!authorized(request,env))
+  if(!ownerAuthorized(request,env))
     return out('Owner authentication required',401,
-      {'www-authenticate':'Basic realm="Rahal Mamut Google setup", charset="UTF-8"'});
+      {'www-authenticate':'Basic realm="Персональный помощник", charset="UTF-8"'});
   try{
     await key(env);
     const state=b64(crypto.getRandomValues(new Uint8Array(32)));
