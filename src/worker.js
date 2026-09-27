@@ -51,67 +51,106 @@ export async function webhook(request, env) {
   const chatId = getChatId(update);
   if (!chatId || chatId !== String(env.TELEGRAM_CHAT_ID)) return ok({error:'forbidden'},403);
   if (!Number.isSafeInteger(update.update_id)) return ok({error:'missing_update_id'},400);
+  const quick = QUICK_ACTIONS.has(commandOf(update));
   const insert = await env.DB.prepare(
     "INSERT OR IGNORE INTO telegram_updates(update_id,status,created_at) VALUES(?,'queued',?)"
   ).bind(update.update_id,nowSeconds()).run();
-  if (insert.meta.changes === 0) return ok({ok:true,duplicate:true});
+  if (insert.meta.changes === 0) {
+    // An earlier Queue send may have failed or timed out after acceptance.
+    // Re-enqueue a queued update; the consumer's atomic claim prevents duplicate
+    // processing. Already delivered/unknown updates must never be re-sent.
+    if (!quick) {
+      const existing=await env.DB.prepare('SELECT status FROM telegram_updates WHERE update_id=?')
+        .bind(update.update_id).first();
+      if (existing?.status==='queued') {
+        try {
+          await env.JOBS.send({kind:'telegram',update});
+          return ok({ok:true,duplicate:true,requeued:true});
+        } catch (e) {
+          failLog('queue_reenqueue_failed',e);
+          return ok({error:'temporary'},503);
+        }
+      }
+    }
+    return ok({ok:true,duplicate:true});
+  }
 
-  // Fast, AI-free commands do not wait for a Queue consumer.
-  if (QUICK_ACTIONS.has(commandOf(update))) {
+  // Fast, AI-free commands return immediately without Queue or Groq.
+  if (quick) {
+    let outboundAttempted=false;
     try {
       await callbackAck(env, update);
-      const answer = await prepareAnswer(update,env);
+      const answer=await prepareAnswer(update,env);
+      // Mark delivery as unknown BEFORE touching Telegram. If the network
+      // succeeds but the response is lost, retrying would send a duplicate.
+      const claim=await env.DB.prepare(
+        "UPDATE telegram_updates SET response_json=?,status='delivery_unknown' WHERE update_id=? AND status='queued'"
+      ).bind(JSON.stringify(answer),update.update_id).run();
+      if(claim.meta.changes!==1) throw new Error('Quick response claim was not acquired');
+      outboundAttempted=true;
       await send(env,chatId,answer);
-      await env.DB.prepare("UPDATE telegram_updates SET status='done' WHERE update_id=?")
+      await env.DB.prepare("UPDATE telegram_updates SET status='done' WHERE update_id=? AND status='delivery_unknown'")
         .bind(update.update_id).run();
       return ok({ok:true,fast:true});
     } catch (e) {
-      failLog('fast_action_failed',e);
+      failLog(outboundAttempted?'fast_delivery_unknown':'fast_action_failed',e);
+      if(outboundAttempted) return ok({ok:true,delivery:'unknown'},202);
+      // No outbound request has started. Allow Telegram to redeliver.
       await env.DB.prepare("DELETE FROM telegram_updates WHERE update_id=? AND status='queued'")
         .bind(update.update_id).run();
       return ok({error:'temporary'},503);
     }
   }
   try {
-    await env.JOBS.send({kind:'telegram', update});
+    await env.JOBS.send({kind:'telegram',update});
     return ok({ok:true,queued:true});
   } catch (e) {
     failLog('queue_enqueue_failed',e);
-    await env.DB.prepare("DELETE FROM telegram_updates WHERE update_id=? AND status='queued'")
-      .bind(update.update_id).run();
+    // Keep the durable queued row. Telegram should retry its webhook delivery;
+    // the duplicate path above will re-enqueue it. Never discard accepted work.
     return ok({error:'temporary'},503);
   }
 }
 
 async function processTelegram(job,env) {
-  const update = job.update;
-  const updateId = update.update_id;
-  const claimed = await env.DB.prepare(
+  const update=job.update;
+  const updateId=update.update_id;
+  const claimed=await env.DB.prepare(
     "UPDATE telegram_updates SET status='processing', attempts=attempts+1, claimed_at=? " +
     "WHERE update_id=? AND (status='queued' OR (status='processing' AND claimed_at<?))"
   ).bind(nowSeconds(),updateId,nowSeconds()-90).run();
-  if (claimed.meta.changes !== 1) {
-    const prior = await env.DB.prepare('SELECT status FROM telegram_updates WHERE update_id=?').bind(updateId).first();
-    if (!prior || prior.status === 'done') return 'done';
+  if(claimed.meta.changes!==1) {
+    const prior=await env.DB.prepare('SELECT status FROM telegram_updates WHERE update_id=?').bind(updateId).first();
+    if(!prior || prior.status==='done' || prior.status==='delivery_unknown') return 'done';
     return 'busy';
   }
+  let outboundAttempted=false;
   try {
     await callbackAck(env,update);
-    const saved = await env.DB.prepare('SELECT response_json FROM telegram_updates WHERE update_id=?')
+    const saved=await env.DB.prepare('SELECT response_json FROM telegram_updates WHERE update_id=?')
       .bind(updateId).first();
-    // Persist prepared answer so a failed Telegram delivery does not re-run Groq or state mutations.
-    let answer = saved?.response_json ? JSON.parse(saved.response_json) : null;
-    if (!answer) {
-      answer = await prepareAnswer(update,env);
-      await env.DB.prepare('UPDATE telegram_updates SET response_json=? WHERE update_id=?')
+    // A prepared answer is reusable on retry; do not re-run Groq or mutate tasks.
+    let answer=saved?.response_json?JSON.parse(saved.response_json):null;
+    if(!answer) {
+      answer=await prepareAnswer(update,env);
+      await env.DB.prepare('UPDATE telegram_updates SET response_json=? WHERE update_id=? AND status=\'processing\'')
         .bind(JSON.stringify(answer),updateId).run();
     }
+    const claim=await env.DB.prepare(
+      "UPDATE telegram_updates SET status='delivery_unknown' WHERE update_id=? AND status='processing'"
+    ).bind(updateId).run();
+    if(claim.meta.changes!==1) throw new Error('Telegram delivery claim was not acquired');
+    outboundAttempted=true;
     await send(env,getChatId(update),answer);
-    await env.DB.prepare("UPDATE telegram_updates SET status='done' WHERE update_id=?")
+    await env.DB.prepare("UPDATE telegram_updates SET status='done' WHERE update_id=? AND status='delivery_unknown'")
       .bind(updateId).run();
     return 'done';
   } catch (e) {
-    failLog('telegram_processing_failed',e);
+    failLog(outboundAttempted?'telegram_delivery_unknown':'telegram_processing_failed',e);
+    if(outboundAttempted) {
+      // Queue must ACK. An uncertain Telegram send cannot be repeated safely.
+      return 'unknown';
+    }
     await env.DB.prepare("UPDATE telegram_updates SET status='queued' WHERE update_id=? AND status='processing'")
       .bind(updateId).run();
     throw e;
