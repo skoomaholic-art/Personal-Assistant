@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {readFileSync} from 'node:fs';
 import {
   gmailAccessToken, gmailHeaders, isWorkGmailMessage, normalizeGmailMessage,
   analyzeGmailEmail, ingestGmailId, pollGmail
@@ -16,39 +18,42 @@ function sampleMail({id='a1b2c3d4',from='Vendor <notice@vendor.example>',to='Ale
   };
 }
 class Db {
-  constructor(){this.mail=new Map();this.tasks=new Map();}
-  prepare(sql) {
-    const bound={args:[]};
-    const statement={
-      bind:(...args)=>{bound.args=args;return statement;},
-      first:async()=>{
-        if(sql.includes('FROM emails WHERE email_id=?'))return this.mail.get(bound.args[0])||null;
-        return null;
-      },
-      all:async()=>{
-        if(sql.includes('SELECT email_id FROM emails WHERE email_id IN')) {
-          const result=bound.args.filter(id=>this.mail.has(id)).map(email_id=>({email_id}));
-          return {results:result};
-        }
-        return {results:[]};
-      },
-      run:async()=>{
-        if(sql.startsWith('INSERT OR IGNORE INTO emails')) {
-          const id=bound.args[0];
-          if(this.mail.has(id))return {meta:{changes:0}};
-          this.mail.set(id,{email_id:id});return {meta:{changes:1}};
-        }
-        if(sql.startsWith('INSERT OR IGNORE INTO tasks')){
-          const id=bound.args[0];
-          if(this.tasks.has(id))return {meta:{changes:0}};
-          this.tasks.set(id,bound.args);return {meta:{changes:1}};
-        }
-        throw new Error('Unexpected SQL in fixture: '+sql.slice(0,40));
-      }
+  constructor(){
+    this.sqlite=new DatabaseSync(':memory:');
+    this.sqlite.exec(readFileSync(new URL('../migrations/0001_init.sql',import.meta.url),'utf8'));
+    const db=this.sqlite;
+    this.mail={
+      get size(){return db.prepare('SELECT COUNT(*) AS n FROM emails').get().n;},
+      set(id,obj){db.prepare("INSERT INTO emails(email_id,received_at,status) VALUES(?,?,'NEW')").run(id,new Date().toISOString());},
+      has(id){return Boolean(db.prepare('SELECT 1 FROM emails WHERE email_id=?').get(id));}
     };
-    return statement;
+    this.tasks={
+      get size(){return db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n;},
+      has(id){return Boolean(db.prepare('SELECT 1 FROM tasks WHERE task_id=?').get(id));}
+    };
+  }
+  prepare(sql) {
+    const st=this.sqlite.prepare(sql);
+    const kind=/^\s*SELECT\b/i.test(sql)?'select':'write';
+    const wrap=(params)=>({
+      _kind:kind,
+      run:async()=>({meta:{changes:Number(st.run(...params).changes)}}),
+      first:async()=>st.get(...params)??null,
+      all:async()=>({results:st.all(...params)})
+    });
+    return {...wrap([]),bind:(...params)=>wrap(params)};
+  }
+  async batch(statements) {
+    this.sqlite.exec('BEGIN IMMEDIATE');
+    try {
+      const results=[];
+      for(const stmt of statements) results.push(stmt._kind==='select'?await stmt.all():await stmt.run());
+      this.sqlite.exec('COMMIT');
+      return results;
+    } catch(error){this.sqlite.exec('ROLLBACK');throw error;}
   }
 }
+
 const realFetch=global.fetch;
 test.afterEach(()=>{global.fetch=realFetch;});
 test('work message filtering matches exact corporate recipient and sender domain',()=>{
