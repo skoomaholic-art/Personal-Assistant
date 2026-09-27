@@ -124,7 +124,24 @@ export async function analyzeGmailEmail(env,email) {
       model:env.GROQ_MODEL || 'openai/gpt-oss-20b',
       messages:[{role:'system',content:prompt},
         {role:'user',content:'От: '+email.from_name+'\nТема: '+email.subject+'\nДата: '+email.received_at+'\nТекст:\n'+email.body}],
-      temperature:0.2,max_completion_tokens:750,response_format:{type:'json_object'}
+      temperature:0.2,max_completion_tokens:750,
+      ...(String(env.GROQ_MODEL||'openai/gpt-oss-20b').match(/^openai\\/gpt-oss-(20|120)b$/)
+        ? {reasoning_effort:'low'} : {}),
+      response_format: String(env.GROQ_MODEL||'openai/gpt-oss-20b').match(/^openai\\/gpt-oss-(20|120)b$/)
+        ? {type:'json_schema',json_schema:{name:'email_analysis',strict:true,schema:{
+          type:'object',
+          properties:{
+            category:{type:'string',enum:[...categories]},
+            priority:{type:'string',enum:[...priorities]},
+            summary:{type:'string'},
+            action:{type:'string'},
+            deadline_text:{type:'string'},
+            deadline_iso:{type:'string'}
+          },
+          required:['category','priority','summary','action','deadline_text','deadline_iso'],
+          additionalProperties:false
+        }}}
+        : {type:'json_object'}
     }),signal:AbortSignal.timeout(18000)
   });
   if (!res.ok) throw new Error('Groq analysis HTTP '+res.status);
