@@ -158,3 +158,40 @@ test('Concurrent consumers cannot both send one Telegram update',async()=>{
     assert.equal(DB.sqlite.prepare('SELECT status FROM telegram_updates WHERE update_id=104').get().status,'done');
   } finally {DB.close();}
 });
+
+test('Successful Telegram send followed by D1 outage is not sent twice',async()=>{
+  const {env,DB,queued}=runtime();
+  let sent=0;
+  global.fetch=async url=>{
+    if(String(url).includes('api.groq.com'))return Response.json({
+      choices:[{message:{content:'Доставленный ответ'}}]
+    });
+    if(String(url).includes('api.telegram.org')) {
+      sent++;
+      return Response.json({ok:true,result:{message_id:77}});
+    }
+    throw Error('Unexpected outbound endpoint');
+  };
+  try {
+    await worker.fetch(request(envelope(105,'Новое сообщение')),env);
+    const originalPrepare=DB.prepare.bind(DB);
+    DB.prepare=sql=>{
+      const statement=originalPrepare(sql);
+      if(!sql.includes("UPDATE telegram_updates SET status='done'"))return statement;
+      const bind=statement.bind;
+      statement.bind=(...args)=>{
+        const bound=bind(...args);
+        return {...bound,run:async()=>{throw Error('D1 connection lost after Telegram delivery');}};
+      };
+      return statement;
+    };
+    const ack={count:0},retry={count:0};
+    const msg=makeMessage(queued[0],ack,retry);
+    await worker.queue({messages:[msg]},env);
+    await worker.queue({messages:[msg]},env);
+    assert.equal(sent,1);
+    assert.equal(ack.count,2);
+    assert.equal(retry.count,0);
+    assert.equal(DB.sqlite.prepare('SELECT status FROM telegram_updates WHERE update_id=105').get().status,'delivery_unknown');
+  } finally {DB.close();}
+});
