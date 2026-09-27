@@ -16,7 +16,10 @@ Existing Google Apps Script bot remains the only live Telegram bot. No existing 
 - Work-email Telegram notifications with a durable claim; disabled to avoid duplicate notices from the existing bot.
 - Durable reminders (0002 schema); disabled, no Cron configured.
 - Local reply preview/edit/cancel based on D1 email summary (0003 schema), **no email send**; disabled until migration.
-- Synthetic Node tests and GitHub Actions CI.
+- Synthetic Node tests and GitHub Actions CI. The suite now also uses actual SQLite D1-compatible SQL, not just permissive in-memory mocks.
+- Telegram outgoing messages: persisted `delivery_unknown` before sending. A Queue retry cannot send the same response twice after an ambiguous network error or failed final D1 write. A queue enqueue error retains the durable queued update for webhook redelivery. Unknown deliveries require manual reconciliation, not blind retry.
+- Gmail ingestion: an atomic `ANALYZING` claim in `emails` is acquired before OAuth/Groq. Competing workers back off. Final email and derived task are committed in one D1 batch; errors roll back both. Stale claims have a guarded takeover path, with cleanup only for the current claim.
+- The user supplied a transcript of Astra reporting additional edits and migration results, but no Astra commits appeared in the shared GitHub branch at inspection time. The safeguards above were added and tested here in GitHub. Do not claim that Astra's own unpublished workspace was merged.
 
 ## Staging flags (all intentionally false)
 `GMAIL_POLL_ENABLED`, `REMINDERS_ENABLED`, `REPLY_PREVIEWS_ENABLED`, `MAIL_INGEST_ENABLED`, `WORKER_EMAIL_NOTIFICATIONS`.
