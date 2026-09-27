@@ -1,23 +1,24 @@
-# Rahal Mamut | staging status
+# Rahal Mamut | Cloudflare staging status
 
-Cloudflare test resources were created on 2026-09-27. They are isolated from the existing Google Apps Script Telegram bot.
+This is an **isolated staging Worker**, not the production Telegram bot. The existing Google Apps Script deployment and Telegram webhook have not been changed.
 
-- GitHub branch: `cloudflare-staging`. Local and GitHub Actions tests pass (16 synthetic tests).
-- Cloudflare Workers Builds is connected to `skoomaholic-art/Personal-Assistant`; production branch for the **staging Worker** is now `cloudflare-staging` (verified 2026-09-27). A successful build/deploy has not been verified yet.
-- D1 database: `rahal-mamut-staging` (ID `0b294974-73c7-40b1-93c3-dfb6dcb797e7`). **Schema not yet applied**.
-- Queue: `rahal-mamut-jobs`.
-- Dead-letter queue: `rahal-mamut-dead-letter`.
-- Worker: `rahal-mamut-staging`, URL `https://rahal-mamut-staging.alexandr-petrossov.workers.dev/`.
-- Current live Worker: default Hello World template; `/health` returns 404. The repository worker code is **not deployed yet**.
-- `wrangler.jsonc` contains the correct Cloudflare account ID and D1 ID; it has bindings for the existing queues.
+- Repository: `skoomaholic-art/Personal-Assistant`, production branch for this staging Worker: `cloudflare-staging`.
+- Worker: `https://rahal-mamut-staging.alexandr-petrossov.workers.dev/`.
+- Worker health: `/health`, staging version 0.1.0.
+- D1: `rahal-mamut-staging` (ID `0b294974-73c7-40b1-93c3-dfb6dcb797e7`).
+- D1 schema: all five required tables `emails`, `history`, `states`, `tasks`, `telegram_updates` were reported present by the live `/health/db` endpoint after applying idempotent schema statements on 2026-09-27.
+- Queue: `rahal-mamut-jobs`; dead-letter queue: `rahal-mamut-dead-letter`.
+- The temporary schema bootstrap route has been **removed from the code**, and the env flag removed from Wrangler configuration; `/health/db` is read-only. Verify this cleanup is deployed after CI passes.
+- The canonical idempotent migration remains in `migrations/0001_init.sql`. A future Wrangler migration run can create its migration ledger without dropping existing tables.
+- No production bot token, Gmail data or outbound email functionality is configured in staging.
+- `MAIL_INGEST_ENABLED=false` and `WORKER_EMAIL_NOTIFICATIONS=false`.
 
-## Next technical steps
+## Remaining work
 
-1. Authenticate Wrangler in the Cloudflare account (browser OAuth or a properly scoped token stored outside source).
-2. From this branch run `npm run check && npm test`.
-3. Run `npx wrangler d1 migrations apply rahal-mamut-staging --remote`.
-4. Set required secrets with `npx wrangler secret put NAME`. For Telegram use **a separate test bot**, not the production token. Never commit secrets.
-5. Run `npx wrangler deploy`, then verify `/health` returns `phase:staging`.
-6. Only after tests, point the **test bot** webhook to the new Worker. Do not change the live bot webhook yet.
+1. Verify CI and the cleaned-up staging deployment. Re-check `/health/db`; it must report all five tables.
+2. Test synthetic Telegram requests directly against the Worker (without changing the live bot webhook or creating another bot).
+3. Migrate remaining Gmail, reminders, task, and guarded email-draft functionality; reconcile state before any switch.
+4. Provision secrets in Cloudflare **only when needed**, never commit secrets or copy tokens into issue comments.
+5. When feature parity and real speed tests are confirmed, schedule a reversible cutover of the existing bot with an explicit rollback plan.
 
-Gmail ingestion and notifications are disabled by default; Gmail replies and reminders have not been migrated. Do not import work email data without authorization. Production Apps Script remains unchanged.
+There is **no second Telegram bot** in this plan.
