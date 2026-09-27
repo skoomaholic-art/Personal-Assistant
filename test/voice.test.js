@@ -8,7 +8,7 @@ test('voice transcription is disabled unless explicitly enabled',async()=>{
   global.fetch=async()=>{throw Error('Voice should never be downloaded');};
   assert.match((await transcribeTelegramVoice({},{
     file_id:'abcd0123456789',file_size:250,duration:10
-  })).message,/выключены/);
+  })).message,/не включены/);
 });
 test('oversized voice is refused before requesting or uploading it',async()=>{
   global.fetch=async()=>{throw Error('Oversized voice must not be downloaded');};
