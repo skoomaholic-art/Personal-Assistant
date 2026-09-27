@@ -153,13 +153,14 @@ export async function ingestGmailId(env, id) {
   if (!isWorkGmailMessage(raw,env)) return {not_work:true};
   const email=normalizeGmailMessage(raw);
   const analysis=await analyzeGmailEmail(env,email);
+  const notify=env.WORKER_EMAIL_NOTIFICATIONS==='true' && analysis.category!=='МУСОР';
   const result=await env.DB.prepare(
     'INSERT OR IGNORE INTO emails(email_id,received_at,from_name,from_email,subject,summary,action,category,priority,deadline_text,deadline_iso,has_attachments,status,notification_status) '+
     'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
   ).bind(email.email_id,email.received_at,email.from_name,email.from_email,email.subject,
     analysis.summary,analysis.action,analysis.category,analysis.priority,
     analysis.deadline_text,analysis.deadline_iso,email.has_attachments?1:0,
-    analysis.needs_review?'NEEDS_REVIEW':'NEW','disabled').run();
+    analysis.needs_review?'NEEDS_REVIEW':'NEW',notify?'queued':'disabled').run();
   if (result.meta.changes!==1) return {duplicate:true};
   let task=false;
   if (analysis.category!=='МУСОР' &&
@@ -171,7 +172,11 @@ export async function ingestGmailId(env, id) {
       analysis.priority,analysis.deadline_iso,analysis.deadline_text,nowIso(),nowIso()).run();
     task=t.meta.changes===1;
   }
-  // Old Apps Script owns live notifications until explicit cutover.
+  // Apps Script owns all production notifications until explicit cutover.
+  if(notify) {
+    try { await env.JOBS.send({kind:'email',email_id:email.email_id}); }
+    catch { return {stored:true,task,needs_review:analysis.needs_review,notification:'queued_for_reconciliation'}; }
+  }
   return {stored:true,task,needs_review:analysis.needs_review};
 }
 
@@ -202,5 +207,15 @@ export async function pollGmail(env) {
     pageToken=data.nextPageToken;
     page++;
   }
-  return {scanned,queued};
+  // Recover stored, never-attempted alerts if queueing failed in a prior run.
+  // The queue consumer must atomically claim status=queued before sending.
+  let pending=0;
+  if(env.WORKER_EMAIL_NOTIFICATIONS==='true') {
+    const p=await env.DB.prepare("SELECT email_id FROM emails WHERE notification_status='queued' ORDER BY received_at ASC LIMIT 25").all();
+    for(const row of p.results||[]) {
+      await env.JOBS.send({kind:'email',email_id:row.email_id});
+      pending++;
+    }
+  }
+  return {scanned,queued,pending};
 }
