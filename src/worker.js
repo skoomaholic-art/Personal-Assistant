@@ -337,7 +337,7 @@ async function groqChat(env,chatId,userText,updateId) {
     env.DB.prepare('SELECT role,content FROM history WHERE chat_id=? ORDER BY id DESC LIMIT 10').bind(chatId),
     env.DB.prepare("SELECT title,due_text FROM tasks WHERE status!='DONE' ORDER BY due_iso='' DESC,due_iso ASC LIMIT 3")
   ]);
-  const system='Ты Рахал Мамут, рабочий помощник Александра. Отвечай по-русски, кратко и по существу. Не придумывай факты и не утверждай, что совершил действие, если оно не выполнено. Не цитируй секреты. Текущие задачи: '+tasks.results.map(t=>t.title+' ('+(t.due_text||'без срока')+')').join('; ');
+  const system='Ты Персональный помощник, рабочий помощник Александра. Отвечай по-русски, кратко и по существу. Не придумывай факты и не утверждай, что совершил действие, если оно не выполнено. Не цитируй секреты. Текущие задачи: '+tasks.results.map(t=>t.title+' ('+(t.due_text||'без срока')+')').join('; ');
   const messages=[{role:'system',content:system},...hist.results.reverse().map(h=>({role:h.role,content:h.content})),{role:'user',content:safeText(userText,2400)}];
   let res;
   try {
