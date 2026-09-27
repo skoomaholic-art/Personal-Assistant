@@ -13,6 +13,7 @@ import {mailCallback,mailFollowup} from './personal-mail.js';
 import {relayCallback,relayFollowup,handleRelayJoin,listRelayContacts} from './telegram-relay.js';
 import {memoryCallback,showMemory} from './memory.js';
 import {dailyBriefPreview,runDailyBrief} from './brief.js';
+import {startOutlookOAuth,completeOutlookOAuth,pollOutlook} from './outlook.js';
 import {connectionStatus} from './admin.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
@@ -497,6 +498,8 @@ export default {
   async fetch(request,env) {
     const path=new URL(request.url).pathname;
     if(path==='/admin/connections') return connectionStatus(request,env);
+    if(path==='/oauth/outlook/start')return startOutlookOAuth(request,env);
+    if(path==='/oauth/outlook/callback')return completeOutlookOAuth(request,env);
     if(path==='/oauth/google/calendar/start')return startCalendarOAuth(request,env);
     if(path==='/oauth/google/start') return startGoogleOAuth(request,env);
     if(path==='/oauth/google/callback') return completeGoogleOAuth(request,env);
@@ -589,6 +592,11 @@ export default {
     if(env.REMINDERS_ENABLED==='true') {
       try { const result=await runReminders(env); console.log(JSON.stringify({event:'reminder_tick',...result})); }
       catch(e) { failLog('reminder_tick_failed',e); throw e; }
+    }
+    if(env.OUTLOOK_POLL_ENABLED==='true'){
+      try { const result=await pollOutlook(env);
+        console.log(JSON.stringify({event:'outlook_poll',...result}));
+      }catch(e){failLog('outlook_poll_failed',e);}
     }
     if(env.DAILY_BRIEF_ENABLED==='true') {
       try { const result=await runDailyBrief(env); console.log(JSON.stringify({event:'daily_brief',...result})); }
