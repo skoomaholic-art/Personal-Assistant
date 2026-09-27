@@ -340,9 +340,11 @@ async function ingestTask(request,env) {
 async function processEmail(job,env) {
   if(env.WORKER_EMAIL_NOTIFICATIONS!=='true') return;
   const e=await env.DB.prepare('SELECT * FROM emails WHERE email_id=?').bind(job.email_id).first();
-  if(!e||e.notification_status==='sent'||e.notification_status==='unknown') return;
-  // Ambiguous outbound delivery must be reconciled, not resent automatically.
-  await env.DB.prepare("UPDATE emails SET notification_status='unknown' WHERE email_id=? AND notification_status='queued'").bind(job.email_id).run();
+  if(!e || e.notification_status!=='queued') return;
+  // One atomic claim for this email ID. A second queued job sees zero changes.
+  // Unknown network delivery is not automatically retried.
+  const claim=await env.DB.prepare("UPDATE emails SET notification_status='unknown' WHERE email_id=? AND notification_status='queued'").bind(job.email_id).run();
+  if(claim.meta.changes!==1) return;
   const notice='📨 '+e.category+'\n\nТема: '+e.subject+'\nОт: '+e.from_name+'\n\n'+e.summary+'\n\nДействие: '+e.action;
   await send(env,env.TELEGRAM_CHAT_ID,{text:notice,reply_markup:emailMarkup(e.email_id)});
   await env.DB.prepare("UPDATE emails SET notification_status='sent' WHERE email_id=?").bind(e.email_id).run();
