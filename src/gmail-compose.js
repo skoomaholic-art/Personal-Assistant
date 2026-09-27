@@ -212,7 +212,7 @@ export async function prepareGmailDraft(env,draftId) {
     throw error;
   }
 }
-export function gmailSendPreview(draft) {
+export function gmailSendPreview(draft,canSend=false) {
   if(!draft||draft.status!=='GMAIL_PREVIEWED')throw new Error('No approved draft preview');
   const header='✉️ Gmail-черновик готов. Письмо НЕ отправлено.\n\n'+
     'От: '+draft.from_email+'\nКому: '+draft.to_email+
@@ -223,10 +223,14 @@ export function gmailSendPreview(draft) {
   const footer='\n\nПроверь текст, адресата и тему. Нажатие «Отправить» отправит письмо через Gmail.';
   const text=header+draft.body+footer;
   if(text.length>3850)throw new Error('Полный предпросмотр не помещается в Telegram, отправка заблокирована');
-  return {text,reply_markup:{inline_keyboard:[
-    [{text:'✅ Отправить письмо',callback_data:'senddraft:'+draft.draft_id+':'+draft.preview_token}],
-    [{text:'❌ Отмена',callback_data:'canceldraft:'+draft.draft_id}]
-  ]}};
+  return {
+    text:canSend?text:text+'\n\nОтправка пока отключена. Черновик сохранён в Gmail.',
+    reply_markup:{inline_keyboard:[
+      ...(canSend?[[{text:'✅ Отправить письмо',
+        callback_data:'senddraft:'+draft.draft_id+':'+draft.preview_token}]]:[]),
+      [{text:'❌ Отмена',callback_data:'canceldraft:'+draft.draft_id}]
+    ]}
+  };
 }
 export async function confirmGmailSend(env,draftId,previewToken) {
   if(env.GMAIL_SEND_ENABLED!=='true')
