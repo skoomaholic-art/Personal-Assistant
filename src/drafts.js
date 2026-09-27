@@ -1,3 +1,4 @@
+import {gmailThreadContext} from './gmail.js';
 // Unsent local reply previews adapted from the legacy MailActions.gs flow.
 // Never invokes Gmail drafts.create or Gmail drafts.send. No outbound email.
 const short=(value,max)=>String(value??'').trim().slice(0,max);
@@ -17,6 +18,10 @@ export async function hashDraft(body) {
 }
 async function draftBody(env,email,instruction) {
   if(!env.GROQ_API_KEY) return short(instruction,2700);
+  // Legacy MailActions.gs included the last four messages in the reply prompt.
+  // This read-only Gmail context is used only after owner OAuth has been set up.
+  const context=env.GMAIL_THREAD_CONTEXT_ENABLED==='true'
+    ? await gmailThreadContext(env,email.email_id) : '';
   const response=await fetch('https://api.groq.com/openai/v1/chat/completions',{
     method:'POST',headers:{
       Authorization:'Bearer '+env.GROQ_API_KEY,'content-type':'application/json'
@@ -31,6 +36,7 @@ async function draftBody(env,email,instruction) {
         {role:'user',content:'Исходная тема: '+short(email.subject,300)+
           '\nОт: '+short(email.from_name,250)+'\nКраткая сводка: '+short(email.summary,1200)+
           '\nДействие: '+short(email.action,800)+
+          '\nПереписка:\n'+context+
           '\nМоя инструкция:\n'+short(instruction,1300)}
       ]
     }),signal:AbortSignal.timeout(18000)
