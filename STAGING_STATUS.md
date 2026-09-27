@@ -3,6 +3,7 @@
 Cloudflare test resources were created on 2026-09-27. They are isolated from the existing Google Apps Script Telegram bot.
 
 - GitHub branch: `cloudflare-staging`. Local and GitHub Actions tests pass (16 synthetic tests).
+- Cloudflare Workers Builds is connected to `skoomaholic-art/Personal-Assistant`; production branch for the **staging Worker** is now `cloudflare-staging` (verified 2026-09-27). A successful build/deploy has not been verified yet.
 - D1 database: `rahal-mamut-staging` (ID `0b294974-73c7-40b1-93c3-dfb6dcb797e7`). **Schema not yet applied**.
 - Queue: `rahal-mamut-jobs`.
 - Dead-letter queue: `rahal-mamut-dead-letter`.
