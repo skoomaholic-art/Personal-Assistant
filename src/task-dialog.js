@@ -1,5 +1,6 @@
 import {backMarkup,taskMarkup,safeText,normalizePriority} from './router.js';
 import {proposeCalendar,calendarAgenda,calendarFollowup} from './calendar.js';
+import {outlookAgenda} from './outlook.js';
 import {draftPersonalMail} from './personal-mail.js';
 import {proposeRelay,inviteRelayContact,listRelayContacts} from './telegram-relay.js';
 import {proposeMemory,showMemory,forgetMemory,personalMemory} from './memory.js';
@@ -16,7 +17,8 @@ const approved={chat:'chat',create_task:'create_task',tasks:'tasks',report:'repo
   task_done:'task_done',task_delete:'task_delete',task_progress:'task_progress',
   create_event:'create_event',calendar_today:'calendar_today',calendar_week:'calendar_week',
   draft_email:'draft_email',relay_message:'relay_message',relay_invite:'relay_invite',
-  contacts:'contacts',remember:'remember',show_memory:'show_memory',forget_memory:'forget_memory'};
+  contacts:'contacts',remember:'remember',show_memory:'show_memory',forget_memory:'forget_memory',
+  outlook_today:'outlook_today',outlook_week:'outlook_week'};
 const pendingMarkup={inline_keyboard:[
   [{text:'✅ Сохранить',callback_data:'task:new:save'},{text:'✏️ Изменить',callback_data:'task:new:change'}],
   [{text:'❌ Отменить',callback_data:'task:new:cancel'},{text:'☰ Меню',callback_data:'menu'}]
@@ -91,7 +93,8 @@ async function interpret(env,chatId,text,context) {
     target:{type:'string'},needs_details:{type:'boolean'},question:{type:'string'},
     to:{type:'string'},subject:{type:'string'},body:{type:'string'},
     instruction:{type:'string'},start_iso:{type:'string'},end_iso:{type:'string'},
-    location:{type:'string'},recipient:{type:'string'},message:{type:'string'},
+    location:{type:'string'},calendar_target:{type:'string',enum:['personal','work']},
+    recipient:{type:'string'},message:{type:'string'},
     note:{type:'string'},memory_index:{type:'string'}
   };
   const system=[
@@ -100,6 +103,7 @@ async function interpret(env,chatId,text,context) {
     'Определи намерение человека: обычный разговор, задачи, календарь, письмо, сообщение другому человеку через бота, подтверждённая память.',
     'create_event: извлеки title,start_iso,end_iso,description,location. Дата и время ISO с UTC+05:00. Если неясны, needs_details=true.',
     'calendar_today/calendar_week: список событий личного календаря.',
+    'outlook_today/outlook_week: события рабочего Outlook. create_event calendar_target=work если пользователь прямо говорит рабочий календарь, иначе personal.',
     'draft_email: точный адрес в to, тема subject, просьба в instruction. НЕ выдумывай email.',
     'relay_message: recipient и message. Бот пишет только подключившимся получателям.',
     'relay_invite: пригласить recipient. contacts: подключённые получатели.',
@@ -379,7 +383,7 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
   if(!intent)return null;
   if(current?.mode==='CALENDAR_INPUT'){
     const d={...data,...Object.fromEntries(
-      ['title','description','start_iso','end_iso','location']
+      ['title','description','start_iso','end_iso','location','calendar_target']
         .filter(k=>intent[k]).map(k=>[k,intent[k]]))};
     if(!d.title||!d.start_iso){
       await setState(env,chatId,'CALENDAR_INPUT',d);
@@ -425,7 +429,8 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
     if(!intent.title||!intent.start_iso){
       await setState(env,chatId,'CALENDAR_INPUT',{
         title:intent.title,description:intent.description,
-        start_iso:intent.start_iso,end_iso:intent.end_iso,location:intent.location
+        start_iso:intent.start_iso,end_iso:intent.end_iso,location:intent.location,
+        calendar_target:intent.calendar_target
       });
       return {text:trim(intent.question,250)||'Как называется событие, на какую дату и время?',
         reply_markup:backMarkup()};
@@ -434,6 +439,8 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
   }
   if(intent.intent==='calendar_today')return calendarAgenda(env,'today');
   if(intent.intent==='calendar_week')return calendarAgenda(env,'week');
+  if(intent.intent==='outlook_today')return outlookAgenda(env,1);
+  if(intent.intent==='outlook_week')return outlookAgenda(env,7);
   if(intent.intent==='draft_email'){
     if(!intent.to||!intent.subject||!(intent.body||intent.instruction)){
       await setState(env,chatId,'PERSONAL_MAIL_INPUT',intent);
