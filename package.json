@@ -1,0 +1,12 @@
+{
+  "name": "rahal-mamut-cloud",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Staged Cloudflare Workers migration for Rahal Mamut",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/worker.js && node --check src/router.js"
+  },
+  "engines": { "node": ">=20" }
+}
