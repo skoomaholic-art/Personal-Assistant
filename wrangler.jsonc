@@ -12,7 +12,8 @@
     "WORKER_EMAIL_NOTIFICATIONS": "false",
     "WORK_EMAIL": "alexandr.petrossov@fmedia.kz",
     "GMAIL_POLL_ENABLED": "false",
-    "REMINDERS_ENABLED": "false"
+    "REMINDERS_ENABLED": "false",
+    "REPLY_PREVIEWS_ENABLED": "false"
   },
   "d1_databases": [
     {
