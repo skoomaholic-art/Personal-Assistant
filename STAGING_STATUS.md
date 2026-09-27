@@ -1,4 +1,4 @@
-# Rahal Mamut | Cloudflare staging status
+# Персональный помощник | Cloudflare staging status
 
 Existing Google Apps Script bot remains the only live Telegram bot. No existing Telegram webhook has been changed.
 
