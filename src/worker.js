@@ -6,7 +6,6 @@ import {
 import {pollGmail, ingestGmailId} from './gmail.js';
 import {runReminders} from './reminders.js';
 import {createDraftPreview, editDraftPreview, cancelDraftPreview, loadDraft, draftPreview} from './drafts.js';
-import {STAGING_EXTRA_SCHEMA} from './staging-extra-schema.js';
 
 const JSON_HEADERS = {'content-type':'application/json; charset=utf-8', 'cache-control':'no-store'};
 const ok = (data, status = 200) => Response.json(data, {status, headers:JSON_HEADERS});
@@ -371,14 +370,6 @@ export default {
     if(request.method==='GET'&&path==='/health/features') {
       if(!env.DB) return ok({ok:false,phase:'staging',reason:'database_unbound'},503);
       try {
-        // Temporary, isolated staging-only, two CREATE TABLE IF NOT EXISTS migrations.
-        // No work mail data, Telegram updates or production assets are touched.
-        const hostname=new URL(request.url).hostname;
-        const bootstrap=env.STAGING_EXTRA_BOOTSTRAP==='true' &&
-          hostname==='rahal-mamut-staging.alexandr-petrossov.workers.dev' &&
-          env.GMAIL_POLL_ENABLED!=='true' && env.REMINDERS_ENABLED!=='true' &&
-          env.REPLY_PREVIEWS_ENABLED!=='true' && env.WORKER_EMAIL_NOTIFICATIONS!=='true';
-        if(bootstrap) await env.DB.batch(STAGING_EXTRA_SCHEMA.map(sql=>env.DB.prepare(sql)));
         const names=await env.DB.prepare(
           "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('reminder_deliveries','reply_drafts') ORDER BY name"
         ).all();
