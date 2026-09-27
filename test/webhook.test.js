@@ -69,10 +69,11 @@ test('text AI request is enqueued and acknowledged without Groq',async()=>{
  assert.equal(r.status,200);assert.equal(e.queued.length,1);
  assert.equal(e.queued[0].kind,'telegram');
 });
-test('queue enqueue failure responds 503 and releases claim',async()=>{
+test('queue enqueue failure responds 503 but retains the durable queued row',async()=>{
  const e=env();e.JOBS.send=async()=>{throw new Error('queue down')};
  const r=await worker.fetch(req(7,'Привет'),e);
- assert.equal(r.status,503);assert.equal(e.DB.ids.size,0);
+ assert.equal(r.status,503);assert.equal(e.DB.ids.size,1);
+ assert.equal(e.DB.ids.get(7).status,'queued');
 });
 test('ingestion is disabled until migration explicitly starts',async()=>{
  const e=env();const r=await worker.fetch(new Request('https://test.example/internal/ingest/email',{method:'POST',headers:{authorization:'Bearer x'},body:'{}'}),e);
