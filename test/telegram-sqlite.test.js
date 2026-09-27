@@ -195,3 +195,58 @@ test('Successful Telegram send followed by D1 outage is not sent twice',async()=
     assert.equal(DB.sqlite.prepare('SELECT status FROM telegram_updates WHERE update_id=105').get().status,'delivery_unknown');
   } finally {DB.close();}
 });
+
+test('voice -> transcription -> task preview -> owner confirmation -> D1 -> report',async()=>{
+  const {env,DB,queued}=runtime();
+  env.TASK_CONVERSATION_ENABLED='true';
+  env.TASK_VOICE_ENABLED='true';
+  const sent=[],called=[];
+  global.fetch=async(url,options={})=>{
+    const uri=String(url);
+    called.push(uri);
+    if(uri.endsWith('/getFile'))
+      return Response.json({ok:true,result:{file_path:'voice/test123.oga',file_size:600}});
+    if(uri.includes('api.telegram.org/file/bot'))
+      return new Response(new Uint8Array([79,103,103,83,1,2,3,4]),{status:200});
+    if(uri.includes('api.groq.com/openai/v1/audio/transcriptions'))
+      return Response.json({text:'Создай задачу подготовить спортивную презентацию в четверг'});
+    if(uri.includes('api.groq.com/openai/v1/chat/completions'))
+      return Response.json({choices:[{message:{content:JSON.stringify({
+        intent:'create_task',reply:'',title:'Подготовить спортивную презентацию',
+        description:'',due_text:'в четверг',due_iso:'',priority:'средний',
+        target:'',needs_details:false,question:''
+      })}}]});
+    if(uri.includes('api.telegram.org/bot')){
+      const action=uri.split('/').at(-1);
+      if(action==='sendMessage')sent.push(JSON.parse(options.body));
+      return Response.json({ok:true,result:{message_id:1}});
+    }
+    throw Error('Unexpected URL '+uri);
+  };
+  async function deliver(update) {
+    const accepted=await worker.fetch(request(update),env);
+    assert.equal(accepted.status,200);
+    const job=queued.shift();
+    assert.ok(job);
+    const ack={count:0},retry={count:0};
+    await worker.queue({messages:[makeMessage(job,ack,retry)]},env);
+    assert.equal(ack.count,1);
+    assert.equal(retry.count,0);
+  }
+  try {
+    await deliver({update_id:210,message:{chat:{id:123},
+      voice:{file_id:'voice-file-12345678',duration:8,file_size:600}}});
+    assert.equal(DB.sqlite.prepare('SELECT COUNT(*) AS n FROM tasks').get().n,0);
+    assert.match(sent.at(-1).text,/🎙 Распознал/);
+    assert.match(sent.at(-1).text,/Сохранить/);
+    await deliver({update_id:211,callback_query:{id:'callback211',
+      message:{chat:{id:123}},data:'task:new:save'}});
+    assert.equal(DB.sqlite.prepare('SELECT COUNT(*) AS n FROM tasks').get().n,1);
+    assert.equal(DB.sqlite.prepare('SELECT title FROM tasks').get().title,
+      'Подготовить спортивную презентацию');
+    await deliver({update_id:212,message:{chat:{id:123},text:'/report'}});
+    assert.match(sent.at(-1).text,/Новые: 1/);
+    assert.equal(called.filter(x=>x.includes('audio/transcriptions')).length,1);
+    assert.equal(called.filter(x=>x.includes('chat/completions')).length,1);
+  }finally{DB.close();}
+});
