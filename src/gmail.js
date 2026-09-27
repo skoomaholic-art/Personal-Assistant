@@ -160,7 +160,7 @@ export async function analyzeGmailEmail(env,email) {
     category:'ПИСЬМО',priority:'средний',summary:cut(email.body || 'Текст письма отсутствует',500),
     action:'AI-анализ не выполнен',deadline_text:'Не указан',deadline_iso:'',needs_review:true
   };
-  const prompt='Ты Рахал Мамут, персональный рабочий помощник Александра. Анализируй рабочие письма. '+
+  const prompt='Ты Персональный помощник, персональный рабочий помощник Александра. Анализируй рабочие письма. '+
     'Ответ строго JSON c ключами category,priority,summary,action,deadline_text,deadline_iso. '+
     'category: ЗАДАЧА,ВАЖНО,НОВОСТЬ,FYI,ВСТРЕЧА,ДОКУМЕНТ,ПИСЬМО,МУСОР. '+
     'priority: высокий,средний,низкий. summary - не больше трёх коротких предложений. '+
