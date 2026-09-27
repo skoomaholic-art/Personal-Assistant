@@ -104,6 +104,49 @@ export function normalizeGmailMessage(message) {
   };
 }
 
+// Read-only replacement for legacy MailActions.gs/getEmailThreadContext.
+// Returned snippets are deliberately bounded. Attachments remain metadata only.
+export async function gmailThreadContext(env, emailId) {
+  const token=await gmailAccessToken(env);
+  const original=await gmailMessage(token,emailId);
+  if(!isWorkGmailMessage(original,env))
+    throw new Error('Original Gmail message is not identified as work mail');
+  const threadId=String(original.threadId||'');
+  if(!/^[a-zA-Z0-9_-]{4,160}$/.test(threadId))
+    throw new Error('Gmail thread ID is missing or invalid');
+  const thread=await gmailGet(token,'/threads/'+encodeURIComponent(threadId),{format:'full'});
+  const list=Array.isArray(thread.messages)?thread.messages:[];
+  // Limit to four most recent thread messages, as the original Apps Script did.
+  return list.slice(-4).map(message=>{
+    const mail=normalizeGmailMessage(message);
+    return [
+      'От: '+mail.from_name,
+      'Дата: '+mail.received_at,
+      'Тема: '+mail.subject,
+      cut(mail.body,1400)
+    ].join('\n');
+  }).join('\n\n-----\n\n').slice(0,7000);
+}
+
+// Metadata of Gmail MIME attachments, never their content. The bytes stay in
+// Gmail; do not pass document contents or private attachments to Groq.
+export function gmailAttachmentManifest(message) {
+  const attachments=[];
+  const walk=part=>{
+    if(!part || typeof part!=='object')return;
+    if(part.filename) {
+      attachments.push({
+        name:cut(part.filename,200),
+        mime_type:cut(part.mimeType||'application/octet-stream',100),
+        size:Math.min(Math.max(0,Number(part.body?.size)||0),100_000_000)
+      });
+    }
+    for(const child of part.parts||[])walk(child);
+  };
+  walk(message?.payload);
+  return attachments.slice(0,80);
+}
+
 export async function analyzeGmailEmail(env,email) {
   if (!env.GROQ_API_KEY) return {
     category:'ПИСЬМО',priority:'средний',summary:cut(email.body || 'Текст письма отсутствует',500),
