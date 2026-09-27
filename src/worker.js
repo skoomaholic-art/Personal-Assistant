@@ -7,7 +7,11 @@ import {pollGmail, ingestGmailId} from './gmail.js';
 import {runReminders} from './reminders.js';
 import {createDraftPreview, editDraftPreview, cancelDraftPreview, loadDraft, draftPreview} from './drafts.js';
 import {prepareGmailDraft, gmailSendPreview, confirmGmailSend} from './gmail-compose.js';
-import {startGoogleOAuth,completeGoogleOAuth} from './google-oauth.js';
+import {startGoogleOAuth,completeGoogleOAuth,startCalendarOAuth} from './google-oauth.js';
+import {calendarAgenda,calendarCallback} from './calendar.js';
+import {mailCallback,mailFollowup} from './personal-mail.js';
+import {relayCallback,relayFollowup,handleRelayJoin,listRelayContacts} from './telegram-relay.js';
+import {memoryCallback,showMemory} from './memory.js';
 import {connectionStatus} from './admin.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
@@ -54,8 +58,41 @@ export async function webhook(request, env) {
     update = JSON.parse(input);
   } catch { return ok({error:'bad_json'},400); }
   const chatId = getChatId(update);
-  if (!chatId || chatId !== String(env.TELEGRAM_CHAT_ID)) return ok({error:'forbidden'},403);
+  if (!chatId) return ok({error:'forbidden'},403);
   if (!Number.isSafeInteger(update.update_id)) return ok({error:'missing_update_id'},400);
+  if(chatId!==String(env.TELEGRAM_CHAT_ID)) {
+    // Other users may only opt in/out of receiving messages from this bot.
+    // They never reach owner commands, Groq, Gmail, tasks or the calendar.
+    if(!update.message||update.message.chat?.type!=='private'||
+       !/^\/(?:start|stop|unsubscribe)(?:\b|@)/i.test(String(update.message.text||'')))
+      return ok({error:'forbidden'},403);
+    const inviteClaim=await env.DB.prepare(
+      "INSERT OR IGNORE INTO telegram_updates(update_id,status,created_at) VALUES(?,'queued',?)"
+    ).bind(update.update_id,nowSeconds()).run();
+    if(inviteClaim.meta.changes!==1)return ok({ok:true,duplicate:true});
+    let outbound=false;
+    try {
+      const response=await handleRelayJoin(env,update);
+      if(!response?.handled||response.chat_id!==chatId)
+        return ok({error:'forbidden'},403);
+      await env.DB.prepare(
+        "UPDATE telegram_updates SET status='delivery_unknown' WHERE update_id=? AND status='queued'"
+      ).bind(update.update_id).run();
+      outbound=true;
+      await send(env,chatId,{text:response.text});
+      await env.DB.prepare(
+        "UPDATE telegram_updates SET status='done' WHERE update_id=? AND status='delivery_unknown'"
+      ).bind(update.update_id).run();
+      return ok({ok:true,opt_in:true});
+    }catch(error){
+      failLog('telegram_optin_failed',error);
+      if(outbound)return ok({ok:true,delivery:'unknown'},202);
+      await env.DB.prepare(
+        "DELETE FROM telegram_updates WHERE update_id=? AND status='queued'"
+      ).bind(update.update_id).run();
+      return ok({error:'temporary'},503);
+    }
+  }
   const quick = QUICK_ACTIONS.has(commandOf(update));
   const insert = await env.DB.prepare(
     "INSERT OR IGNORE INTO telegram_updates(update_id,status,created_at) VALUES(?,'queued',?)"
@@ -219,6 +256,14 @@ async function prepareAnswer(update, env) {
   }
   if (['tasks','report','newtask','voicehelp'].includes(action))
     return taskMenuAction(env,chatId,action);
+  if(action==='calendar')return calendarAgenda(env,'today');
+  if(action==='compose'){
+    await setState(env,chatId,'PERSONAL_MAIL_INPUT','{}');
+    return {text:'✉️ Кому написать? Укажи email, тему и что нужно передать. Сначала покажу полный черновик, ничего без подтверждения не отправлю.',
+      reply_markup:backMarkup()};
+  }
+  if(action==='contacts')return listRelayContacts(env);
+  if(action==='memory')return showMemory(env,chatId);
   if (action==='mail') {
     if(env.GMAIL_POLL_ENABLED!=='true')
       return {text:'Проверка Gmail сейчас выключена.',reply_markup:backMarkup()};
@@ -270,6 +315,10 @@ async function prepareAnswer(update, env) {
     const t=await env.DB.prepare('SELECT task_id,title FROM tasks WHERE email_id=?').bind(id).first();
     return {text:'✅ Задача сохранена:\n'+t.title,reply_markup:taskMarkup(t.task_id)};
   }
+  if(callback?.startsWith('cal:'))return calendarCallback(env,chatId,callback);
+  if(callback?.startsWith('mail:'))return mailCallback(env,chatId,callback);
+  if(callback?.startsWith('relay:'))return relayCallback(env,chatId,callback);
+  if(callback?.startsWith('memory:'))return memoryCallback(env,chatId,callback);
   if(callback && (callback==='task:new:save'||callback==='task:new:change'||
      callback==='task:new:cancel'||callback==='task:action:yes'||
      callback==='task:action:no'||callback.startsWith('task:delete:ask:')))
@@ -338,6 +387,14 @@ async function prepareAnswer(update, env) {
   }
   if (!text) return {text:'Пришли текстовое или голосовое сообщение.',reply_markup:backMarkup()};
   const state=await env.DB.prepare('SELECT mode,data FROM states WHERE chat_id=?').bind(chatId).first();
+  if(['PERSONAL_MAIL_DRAFT','PERSONAL_MAIL_EDIT'].includes(state?.mode)){
+    const result=await mailFollowup(env,chatId,text);
+    if(result)return result;
+  }
+  if(['RELAY_DRAFT','RELAY_EDIT'].includes(state?.mode)){
+    const result=await relayFollowup(env,chatId,text);
+    if(result)return result;
+  }
   if (state?.mode==='SEARCH') {
     await clearState(env,chatId);
     const term='%'+text.slice(0,80).toLowerCase()+'%';
@@ -437,6 +494,7 @@ export default {
   async fetch(request,env) {
     const path=new URL(request.url).pathname;
     if(path==='/admin/connections') return connectionStatus(request,env);
+    if(path==='/oauth/google/calendar/start')return startCalendarOAuth(request,env);
     if(path==='/oauth/google/start') return startGoogleOAuth(request,env);
     if(path==='/oauth/google/callback') return completeGoogleOAuth(request,env);
     if(request.method==='GET'&&path==='/health') return ok({ok:true,service:'rahal-mamut',phase:'staging',version:'0.1.0'});
