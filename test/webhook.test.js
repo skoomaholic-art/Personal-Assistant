@@ -6,7 +6,7 @@ class FakeDB {
  constructor(){this.ids=new Map();this.sent=[];this.states=[];this.history=[];this.tasks=[];}
  prepare(sql){return {bind:(...args)=>({
   run:async()=>this.run(sql,args),first:async()=>this.first(sql,args),all:async()=>this.all(sql,args)
- })};}
+ }),all:async()=>this.all(sql,[])};}
  async batch(stmts){return Promise.all(stmts.map(s=>s.run()));}
  async run(sql,args){
   if(sql.startsWith('INSERT OR IGNORE INTO telegram_updates')){
