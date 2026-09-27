@@ -476,8 +476,24 @@ export default {
   async scheduled(controller,env,ctx) {
     // Disabled by default. No Google account or bot token is needed for staging.
     if(env.GMAIL_POLL_ENABLED==='true') {
-      try { const result=await pollGmail(env); console.log(JSON.stringify({event:'gmail_poll',...result})); }
-      catch(e) { failLog('gmail_poll_failed',e); throw e; }
+      try {
+        const result=await pollGmail(env);
+        await env.DB.prepare(
+          "INSERT INTO states(chat_id,mode,data,updated_at) VALUES(?,?,?,?) "+
+          "ON CONFLICT(chat_id) DO UPDATE SET mode=excluded.mode,data=excluded.data,updated_at=excluded.updated_at"
+        ).bind('system:gmail-poll','OK',JSON.stringify(result),
+          nowSeconds()).run();
+        console.log(JSON.stringify({event:'gmail_poll',...result}));
+      } catch(e) {
+        failLog('gmail_poll_failed',e);
+        try {
+          await env.DB.prepare(
+            "INSERT INTO states(chat_id,mode,data,updated_at) VALUES(?,?,?,?) "+
+            "ON CONFLICT(chat_id) DO UPDATE SET mode=excluded.mode,data=excluded.data,updated_at=excluded.updated_at"
+          ).bind('system:gmail-poll','ERROR','Gmail poll failed',nowSeconds()).run();
+        } catch { /* A D1 outage is already captured by failLog. */ }
+        throw e;
+      }
     }
     if(env.REMINDERS_ENABLED==='true') {
       try { const result=await runReminders(env); console.log(JSON.stringify({event:'reminder_tick',...result})); }
