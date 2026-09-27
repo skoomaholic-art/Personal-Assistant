@@ -1,4 +1,4 @@
-# Рахал Мамут | Cloudflare migration
+# Персональный помощник | Cloudflare migration
 
 Ветка `cloudflare-staging` содержит **тестовый** сервер. Рабочий бот остаётся на Google Apps Script; его webhook, Gmail, таблицы и триггеры не изменены. Второго бота нет.
 
