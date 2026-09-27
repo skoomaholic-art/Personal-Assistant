@@ -1,1 +1,55 @@
-# Personal-Assistant
+# Рахал Мамут | Cloudflare migration
+
+Ветка `cloudflare-staging` содержит **тестовый** сервер. Рабочий бот остаётся на Google Apps Script; его webhook, Gmail, таблицы и триггеры не изменены. Второго бота нет.
+
+## Исходники и компоненты
+
+- `legacy/Code.gs`, `legacy/Storage.gs`, `legacy/Webhook.gs`, `legacy/MailActions.gs` - копии исходных скриптов v1.1 как reference, **не запускаются** в Cloudflare.
+- `src/router.js` - команды/кнопки и чистые функции.
+- `src/worker.js` - Telegram webhook, очередь, D1, Groq, read-only диагностика.
+- `src/gmail.js` - получение рабочих писем через Gmail REST, фильтр получателей/отправителей, Groq-анализ и создание задач. Только чтение Gmail; никаких `messages.send`, `drafts.send` или удаления писем.
+- `src/reminders.js` - выбор задач и защита от повторных Telegram-уведомлений с D1 claim до отправки.
+- `src/drafts.js` - локальное создание, просмотр, редактирование и отмена **неотправленных** черновиков на основе краткой сводки. Gmail drafts API и отправка отсутствуют.
+- `migrations/` - схема базы и дополнительные таблицы. Никаких реальных писем в staging не импортировали.
+- `test/` - синтетические тесты без доступа к Gmail и Telegram.
+
+## Текущий статус
+
+| Функция | Состояние |
+|---|---|
+| Telegram webhook, меню, поиск, задачи, Groq | Реализовано в staging; действующий webhook не переключён |
+| D1: emails / tasks / history / states / telegram_updates | Проверено через `/health/db` |
+| Gmail REST-опрос, анализ и задачи | Код есть; `GMAIL_POLL_ENABLED=false`, OAuth не настроен |
+| Доставка новых Gmail-уведомлений | Код есть с атомарным claim; `WORKER_EMAIL_NOTIFICATIONS=false` |
+| Напоминания | Код есть; таблица миграции 0002 ещё не подтверждена на сервере; `REMINDERS_ENABLED=false` |
+| Локальные черновики | Код есть; таблица миграции 0003 ещё не подтверждена; `REPLY_PREVIEWS_ENABLED=false` |
+| Чтение Gmail-вложений, полная цепочка письма, Gmail draft/send | Пока не перенесены |
+| Google OAuth и переключение основного бота | Требуют отдельного согласования и настройки |
+
+Не изменяйте флаги на `true` до применения соответствующих миграций, предоставления разрешений и сквозных проверок.
+
+## Запуск тестов
+
+Node.js 20+:
+
+```bash
+npm run check
+npm test
+```
+
+[Тестовый Worker](https://rahal-mamut-staging.alexandr-petrossov.workers.dev/health)
+| [D1 health](https://rahal-mamut-staging.alexandr-petrossov.workers.dev/health/db)
+
+В CI запускаются Node-тесты после обновления ветки. Это **не** заменяет живую проверку Gmail/OAuth/Telegram и не доказывает скорость реального бота.
+
+## Будущая безопасная настройка
+
+1. В Cloudflare **staging** применить миграции `0001_init.sql` (уже созданные таблицы имеют `IF NOT EXISTS`), `0002_reminder_deliveries.sql`, `0003_local_reply_previews.sql`; проверить таблицы и журнал миграций. Без DROP/DELETE и без переноса корпоративных писем до отдельного разрешения.
+2. В Google Cloud включить Gmail API и создать OAuth 2.0-клиент, разрешить доступ только владельцу Gmail. Для опроса достаточно `gmail.readonly`. Установить `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` как Cloudflare Secrets и `GROQ_API_KEY` отдельно; не коммитить их в GitHub и не отправлять в чат. Требуется пользовательское согласие Google.
+3. Только после проверки включить опрос `GMAIL_POLL_ENABLED=true` и Cron Trigger (например, раз в 5 минут в UTC). Пока он отсутствует.
+4. Отдельно проверить дедупликацию новых писем, задачи, историю, уведомления и откат. На время тестов `WORKER_EMAIL_NOTIFICATIONS` оставлять выключенным, потому что исходный Apps Script уже шлёт уведомления.
+5. Перед запуском напоминаний применить 0002, а перед локальными черновиками 0003.
+6. Только при достигнутом функциональном соответствии и после замеров согласовать переключение **одного существующего** Telegram webhook на Worker с заранее зафиксированным старым URL для отката. Ключи не публиковать.
+7. Настоящую отправку email реализовать отдельным изменением: требуется дополнительный OAuth scope, проверка отправителя/alias, получателей, темы, полного текста, вложений и статуса SENT/UNKNOWN. До этого её невозможно вызвать на новом сервере.
+
+**Важно:** GitHub содержит код, а не скопированные из Apps Script Script Properties. Подключение репозитория к Cloudflare не даёт прав читать Gmail автоматически.
