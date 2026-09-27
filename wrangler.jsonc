@@ -9,8 +9,7 @@
     "WORK_DOMAIN": "fmedia.kz",
     "TZ_OFFSET_MINUTES": "300",
     "MAIL_INGEST_ENABLED": "false",
-    "WORKER_EMAIL_NOTIFICATIONS": "false",
-    "STAGING_SCHEMA_BOOTSTRAP": "true"
+    "WORKER_EMAIL_NOTIFICATIONS": "false"
   },
   "d1_databases": [
     {
