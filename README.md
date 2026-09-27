@@ -6,6 +6,8 @@
 
 - `legacy/Code.gs`, `legacy/Storage.gs`, `legacy/Webhook.gs`, `legacy/MailActions.gs` - копии исходных скриптов v1.1 как reference, **не запускаются** в Cloudflare.
 - `src/router.js` - команды/кнопки и чистые функции.
+- `src/task-dialog.js` - естественный диалог, уточнения, подтверждение создания задачи, списки и отчёты, закрытие и мягкое удаление. Действия в D1 выполняет код, а не модель.
+- `src/voice.js` - получение голосовых Telegram владельца и распознавание Whisper через Groq; аудиофайлы не сохраняются.
 - `src/worker.js` - Telegram webhook, очередь, D1, Groq, read-only диагностика.
 - `src/admin.js` - защищённое паролем подтверждение Google/Groq, число обработанных писем и статус последней проверки без доступа к содержимому почты.
 - `src/gmail.js` - Gmail REST: чтение писем и цепочек, метаданные вложений, рабочий фильтр, Groq-анализ, задачи и дедупликация. Для обработки писем достаточно разрешения `gmail.readonly`.
@@ -19,6 +21,8 @@
 | Функция | Состояние |
 |---|---|
 | Telegram webhook, меню, поиск, задачи, Groq | Реализовано в staging; действующий webhook не переключён |
+| Новое меню, чат и задачи сообщениями | В staging две короткие кнопки в каждой строке, команды `/new`, `/tasks`, `/report`, уточнения и подтверждение создания/удаления; `TASK_CONVERSATION_ENABLED=true` |
+| Голосовые | В staging `TASK_VOICE_ENABLED=true`; скачивание через Telegram getFile и распознавание Groq Whisper. Аудио не сохраняется; требуется подключение прежнего Telegram webhook при согласованном переключении. |
 | D1: emails / tasks / history / states / telegram_updates | Проверено через `/health/db` |
 | Gmail REST-опрос, анализ и задачи | OAuth подключён владельцем. `GMAIL_POLL_ENABLED=true`, Cron настроен каждые 5 минут. Обрабатываются только письма после первого подключения Google; реальный результат проверяется через защищённый `/admin/connections`. |
 | Доставка новых Gmail-уведомлений | Код есть с атомарным claim; `WORKER_EMAIL_NOTIFICATIONS=false` |
@@ -27,7 +31,7 @@
 | Gmail thread, вложения, реальный Draft и отправка | Чтение последних четырёх писем и метаданные вложений реализованы. Создание/отправка Gmail Draft реализованы с защитами, но не подключены к реальной почте. Содержимое вложений не переносится. |
 | Google OAuth и переключение основного бота | OAuth-клиент и согласие Google настроены, ключ Groq добавлен владельцем. Защищённый `/admin/connections` проверяет работу интеграций без чтения сообщений. Основной webhook остаётся в Apps Script. |
 
-Обработка Gmail включена в staging. `WORKER_EMAIL_NOTIFICATIONS`, `GMAIL_SEND_ENABLED`, `GMAIL_DRAFTS_ENABLED`, `REPLY_PREVIEWS_ENABLED`, `REMINDERS_ENABLED` остаются выключенными. Существующий Telegram webhook не менялся.
+Обработка Gmail и тестовые диалог/голос (`TASK_CONVERSATION_ENABLED`, `TASK_VOICE_ENABLED`) включены в staging. `WORKER_EMAIL_NOTIFICATIONS`, `GMAIL_SEND_ENABLED`, `GMAIL_DRAFTS_ENABLED`, `REPLY_PREVIEWS_ENABLED`, `REMINDERS_ENABLED` остаются выключенными. Существующий Telegram webhook не менялся.
 
 ## Запуск тестов
 
@@ -42,6 +46,8 @@ npm test
 | [D1 health](https://rahal-mamut-staging.alexandr-petrossov.workers.dev/health/db)
 
 В CI запускаются Node-тесты после обновления ветки. Это **не** заменяет живую проверку Gmail/OAuth/Telegram и не доказывает скорость реального бота.
+
+Диалоговые сценарии проверяются на синтетических сообщениях через настоящий D1-совместимый SQLite. Реальные Telegram-тесты невозможны без подключения существующего токена/webhook; старые задачи из Apps Script/Sheets в D1 пока не перенесены. Рабочую корпоративную почту пересылать без разрешения компании нельзя.
 
 ## Будущая безопасная настройка
 
