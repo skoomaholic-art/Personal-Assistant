@@ -133,7 +133,7 @@ test('completed tasks can also be deleted, but only after a second click',async(
       "VALUES('finished:1',NULL,'Завершённая задача','','DONE','средний','','',?,?)"
     ).run(date,date);
     const ask=await taskCallback(env,'owner','task:delete:ask:finished:1',1);
-    assert.match(ask.text,/Подтверд/);
+    assert.match(ask.text,/Статус после подтверждения/);
     assert.equal(DB.sqlite.prepare("SELECT status FROM tasks WHERE task_id='finished:1'").get().status,'DONE');
     await taskCallback(env,'owner','task:action:yes',2);
     assert.equal(DB.sqlite.prepare("SELECT status FROM tasks WHERE task_id='finished:1'").get().status,'DELETED');
