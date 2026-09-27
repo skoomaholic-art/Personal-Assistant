@@ -9,6 +9,8 @@ import {createDraftPreview, editDraftPreview, cancelDraftPreview, loadDraft, dra
 import {prepareGmailDraft, gmailSendPreview, confirmGmailSend} from './gmail-compose.js';
 import {startGoogleOAuth,completeGoogleOAuth} from './google-oauth.js';
 import {connectionStatus} from './admin.js';
+import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
+import {transcribeTelegramVoice} from './voice.js';
 
 const JSON_HEADERS = {'content-type':'application/json; charset=utf-8', 'cache-control':'no-store'};
 const ok = (data, status = 200) => Response.json(data, {status, headers:JSON_HEADERS});
@@ -185,7 +187,7 @@ async function listEmails(env,where,bind=[]) {
   return res.results;
 }
 async function getTasks(env) {
-  const res=await env.DB.prepare("SELECT task_id,email_id,title,description,status,priority,due_iso,due_text,created_at FROM tasks WHERE status!='DONE' ORDER BY due_iso='' DESC,due_iso ASC LIMIT 80").all();
+  const res=await env.DB.prepare("SELECT task_id,email_id,title,description,status,priority,due_iso,due_text,created_at FROM tasks WHERE status NOT IN ('DONE','DELETED') ORDER BY due_iso='' DESC,due_iso ASC LIMIT 80").all();
   return res.results;
 }
 async function setState(env,chatId,mode,data='') {
@@ -214,6 +216,16 @@ async function prepareAnswer(update, env) {
       env.DB.prepare('DELETE FROM states WHERE chat_id=?').bind(chatId)
     ]);
     return {text:'✅ Контекст очищен.',reply_markup:backMarkup()};
+  }
+  if (['tasks','report','newtask','voicehelp'].includes(action))
+    return taskMenuAction(env,chatId,action);
+  if (action==='mail') {
+    if(env.GMAIL_POLL_ENABLED!=='true')
+      return {text:'Проверка Gmail сейчас выключена.',reply_markup:backMarkup()};
+    const result=await pollGmail(env);
+    return {text:'📨 Почта проверена. Просмотрено писем: '+result.scanned+
+      '. Новых для анализа: '+result.queued+
+      '. Записи появятся в задачах после обработки очереди.',reply_markup:backMarkup()};
   }
   if (action==='important') return fromRows('🔥 Важное',await listEmails(env,"priority='высокий' OR category='ВАЖНО'"),'email');
   if (action==='news') return fromRows('📰 Новости / FYI',await listEmails(env,"category IN ('НОВОСТЬ','FYI')"),'email');
@@ -258,15 +270,22 @@ async function prepareAnswer(update, env) {
     const t=await env.DB.prepare('SELECT task_id,title FROM tasks WHERE email_id=?').bind(id).first();
     return {text:'✅ Задача сохранена:\n'+t.title,reply_markup:taskMarkup(t.task_id)};
   }
+  if(callback && (callback==='task:new:save'||callback==='task:new:change'||
+     callback==='task:new:cancel'||callback==='task:action:yes'||
+     callback==='task:action:no'||callback.startsWith('task:delete:ask:')))
+    return taskCallback(env,chatId,callback,update.update_id);
   if (callback?.startsWith('task:view:')) {
-    const t=await env.DB.prepare('SELECT task_id,title,description,status,priority,due_text FROM tasks WHERE task_id=?').bind(callback.slice(10)).first();
+    const t=await env.DB.prepare("SELECT task_id,title,description,status,priority,due_text FROM tasks WHERE task_id=? AND status!='DELETED'").bind(callback.slice(10)).first();
     return t?{text:safeText('✅ Задача\n\n'+t.title+'\n\n'+t.description+'\nСтатус: '+t.status+'\nПриоритет: '+t.priority+'\nДедлайн: '+t.due_text),reply_markup:taskMarkup(t.task_id)}:{text:'Задача не найдена.',reply_markup:backMarkup()};
   }
   if (callback?.startsWith('task:done:') || callback?.startsWith('task:progress:')) {
     const done=callback.startsWith('task:done:');
     const id=callback.slice(done?10:14);
-    await env.DB.prepare('UPDATE tasks SET status=?,updated_at=? WHERE task_id=?').bind(done?'DONE':'IN_PROGRESS',new Date().toISOString(),id).run();
-    return {text:done?'✅ Отмечено выполненным.':'🟡 Отмечено «В работе».',reply_markup:backMarkup()};
+    const result=await env.DB.prepare("UPDATE tasks SET status=?,updated_at=? WHERE task_id=? AND status NOT IN ('DONE','DELETED')")
+      .bind(done?'DONE':'IN_PROGRESS',new Date().toISOString(),id).run();
+    return {text:result.meta.changes===1?
+      (done?'✅ Задача отмечена выполненной.':'🟡 Задача в работе.'):
+      'Задача уже закрыта или удалена.',reply_markup:backMarkup()};
   }
   if (callback?.startsWith('email:reply:')) {
     if (env.REPLY_PREVIEWS_ENABLED!=='true') {
@@ -309,8 +328,15 @@ async function prepareAnswer(update, env) {
     return {...result,reply_markup:backMarkup()};
   }
   if (callback) return {text:'Эта кнопка пока недоступна в тестовой версии.',reply_markup:backMarkup()};
-  const text=String(update?.message?.text||'').trim();
-  if (!text) return {text:'Пришли текстовое сообщение.',reply_markup:backMarkup()};
+  let text=String(update?.message?.text||'').trim();
+  let transcript='';
+  if(update?.message?.voice){
+    const audio=await transcribeTelegramVoice(env,update.message.voice);
+    if(!audio.ok)return {text:audio.message,reply_markup:backMarkup()};
+    text=audio.text;
+    transcript=text;
+  }
+  if (!text) return {text:'Пришли текстовое или голосовое сообщение.',reply_markup:backMarkup()};
   const state=await env.DB.prepare('SELECT mode,data FROM states WHERE chat_id=?').bind(chatId).first();
   if (state?.mode==='SEARCH') {
     await clearState(env,chatId);
@@ -326,6 +352,10 @@ async function prepareAnswer(update, env) {
     const draft=await editDraftPreview(env,state.data,text);
     await clearState(env,chatId);
     return draftPreview(draft,env);
+  }
+  if(env.TASK_CONVERSATION_ENABLED==='true') {
+    const result=await taskTalk(env,chatId,text,update.update_id,transcript);
+    if(result)return result;
   }
   return await groqChat(env,chatId,text,update.update_id);
 }
