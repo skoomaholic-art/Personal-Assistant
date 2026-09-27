@@ -66,10 +66,40 @@ async function digest(value) {
 const encodeSubject=text=>{
   const raw=assertHeader(text,'subject');
   if(/^[\x20-\x7e]*$/.test(raw))return raw;
-  const bytes=new TextEncoder().encode(raw);
-  let bin='';for(const n of bytes)bin+=String.fromCharCode(n);
-  return '=?UTF-8?B?'+btoa(bin)+'?=';
+  // MIME encoded-words must not exceed 75 characters. Keep UTF-8
+  // codepoints intact and fold on encoded-word boundaries.
+  const chunks=[];
+  let bytes=[];
+  for(const char of raw) {
+    const part=Array.from(new TextEncoder().encode(char));
+    if(bytes.length+part.length>40&&bytes.length){
+      chunks.push(bytes);bytes=[];
+    }
+    bytes.push(...part);
+  }
+  if(bytes.length)chunks.push(bytes);
+  return chunks.map(chunk=>{
+    let bin='';for(const n of chunk)bin+=String.fromCharCode(n);
+    return '=?UTF-8?B?'+btoa(bin)+'?=';
+  }).join('\r\n ');
 };
+function decodeSubject(value) {
+  const normalized=safe(value,1200).replace(/\r?\n[ \t]+/g,' ')
+    .replace(/\?=\s+=\?/g,'?==?');
+  return normalized.replace(/=\?utf-8\?([bq])\?([^?]+)\?=/gi,
+    (whole,kind,encoded)=>{
+      try{
+        const bytes=kind.toLowerCase()==='b'
+          ? Uint8Array.from(atob(encoded),c=>c.charCodeAt(0))
+          : Uint8Array.from(
+            encoded.replace(/_/g,' ').replace(/=([0-9a-f]{2})/gi,
+              (_,hex)=>String.fromCharCode(parseInt(hex,16))),
+            c=>c.charCodeAt(0)
+          );
+        return new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+      }catch{return whole;}
+    }).trim();
+}
 export function buildReplyMime({from,to,subject,body,originalMessageId,references}) {
   from=oneAddress(from);to=oneAddress(to);
   if(!from||!to)throw new Error('Invalid from/to address');
@@ -142,7 +172,7 @@ export async function gmailDraftSnapshot(env,token,gmailDraftId) {
   const body=fullDraftBody(m);
   const snapshot={
     from_email:from,to_email:to,cc_line:'',bcc_line:'',
-    subject:safe(h.subject,300),body,
+    subject:decodeSubject(h.subject).slice(0,300),body,
     attachment_manifest:'[]'
   };
   if(!snapshot.subject||!snapshot.body)throw new Error('Incomplete Gmail draft');
