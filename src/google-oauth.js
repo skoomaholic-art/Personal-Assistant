@@ -80,7 +80,7 @@ export async function startGoogleOAuth(request,env) {
   if(!enabled(env))return out('Google pairing is disabled',503);
   if(!ownerAuthorized(request,env))
     return out('Owner authentication required',401,
-      {'www-authenticate':'Basic realm="Персональный помощник", charset="UTF-8"'});
+      {'www-authenticate':'Basic realm="Personal Assistant", charset="UTF-8"'});
   try{
     await key(env);
     const state=b64(crypto.getRandomValues(new Uint8Array(32)));
