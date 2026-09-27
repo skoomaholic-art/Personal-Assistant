@@ -8,7 +8,8 @@ export function commandOf(update) {
     '/start': 'menu', '/menu': 'menu', 'меню': 'menu',
     '/cancel': 'cancel', 'отмена': 'cancel', '/reset': 'reset',
     '/today': 'today', '/week': 'week', '/important': 'important',
-    '/news': 'news', '/colleagues': 'colleagues', '/search': 'search'
+    '/news': 'news', '/colleagues': 'colleagues', '/search': 'search',
+    '/tasks': 'tasks', '/report': 'report', '/new': 'newtask', '/mail': 'mail'
   };
   if (exact[lower]) return exact[lower];
   if (lower.includes('что важного')) return 'important';
@@ -16,6 +17,9 @@ export function commandOf(update) {
   if (lower.includes('на неделю')) return 'week';
   if (lower.includes('новост')) return 'news';
   if (lower.includes('коллег') && lower.includes('письм')) return 'colleagues';
+  if (lower === 'список задач' || lower === 'покажи задачи' || lower === 'мои задачи') return 'tasks';
+  if (lower === 'отчёт по задачам' || lower === 'отчет по задачам') return 'report';
+  if (lower === 'проверь почту' || lower === 'проверить почту') return 'mail';
   return '';
 }
 export function getChatId(update) {
@@ -33,12 +37,16 @@ export function safeText(value, max = 3900) {
   const text = String(value ?? '');
   return text.length <= max ? text : text.slice(0, max - 25) + '\n\n[Текст сокращён]';
 }
+// Telegram chooses button widths. Two short, balanced labels per row
+// prevent the tall, irregular single-column menu seen in the old bot.
 export function menuMarkup() {
   return {inline_keyboard: [
     [{text:'🔥 Важное',callback_data:'important'},{text:'✅ Сегодня',callback_data:'today'}],
-    [{text:'📅 Неделя',callback_data:'week'},{text:'👥 Коллеги',callback_data:'colleagues'}],
-    [{text:'📰 Новости',callback_data:'news'},{text:'🔎 Поиск',callback_data:'search'}],
-    [{text:'🧠 Сброс контекста',callback_data:'reset'}]
+    [{text:'📅 Неделя',callback_data:'week'},{text:'📋 Задачи',callback_data:'tasks'}],
+    [{text:'📰 Новости',callback_data:'news'},{text:'👥 Коллеги',callback_data:'colleagues'}],
+    [{text:'🔎 Поиск',callback_data:'search'},{text:'📊 Отчёт',callback_data:'report'}],
+    [{text:'📨 Почта',callback_data:'mail'},{text:'➕ Задача',callback_data:'newtask'}],
+    [{text:'🎙 Голосом',callback_data:'voicehelp'},{text:'🧹 Очистить чат',callback_data:'reset'}]
   ]};
 }
 export function backMarkup() { return {inline_keyboard:[[{text:'☰ Меню',callback_data:'menu'}]]}; }
@@ -49,7 +57,7 @@ export function emailMarkup(emailId) { return {inline_keyboard:[
 ]}; }
 export function taskMarkup(taskId) { return {inline_keyboard:[
   [{text:'🟡 В работу',callback_data:'task:progress:'+taskId},{text:'✅ Выполнено',callback_data:'task:done:'+taskId}],
-  [{text:'☰ Меню',callback_data:'menu'}]
+  [{text:'🗑 Удалить',callback_data:'task:delete:ask:'+taskId},{text:'☰ Меню',callback_data:'menu'}]
 ]}; }
 export function normalizePriority(value) { return ['высокий','средний','низкий'].includes(value) ? value : 'средний'; }
 export function isEmailObject(x) { return x && typeof x === 'object' && typeof x.email_id === 'string' && /^[A-Za-z0-9_-]{5,48}$/.test(x.email_id) && typeof x.subject === 'string'; }
