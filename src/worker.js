@@ -8,6 +8,7 @@ import {runReminders} from './reminders.js';
 import {createDraftPreview, editDraftPreview, cancelDraftPreview, loadDraft, draftPreview} from './drafts.js';
 import {prepareGmailDraft, gmailSendPreview, confirmGmailSend} from './gmail-compose.js';
 import {startGoogleOAuth,completeGoogleOAuth} from './google-oauth.js';
+import {connectionStatus} from './admin.js';
 
 const JSON_HEADERS = {'content-type':'application/json; charset=utf-8', 'cache-control':'no-store'};
 const ok = (data, status = 200) => Response.json(data, {status, headers:JSON_HEADERS});
@@ -405,6 +406,7 @@ async function processEmail(job,env) {
 export default {
   async fetch(request,env) {
     const path=new URL(request.url).pathname;
+    if(path==='/admin/connections') return connectionStatus(request,env);
     if(path==='/oauth/google/start') return startGoogleOAuth(request,env);
     if(path==='/oauth/google/callback') return completeGoogleOAuth(request,env);
     if(request.method==='GET'&&path==='/health') return ok({ok:true,service:'rahal-mamut',phase:'staging',version:'0.1.0'});
