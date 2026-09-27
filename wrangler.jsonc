@@ -20,7 +20,15 @@
     "GMAIL_DRAFTS_ENABLED": "false",
     "GMAIL_SEND_ENABLED": "false",
     "TASK_CONVERSATION_ENABLED": "true",
-    "TASK_VOICE_ENABLED": "true"
+    "TASK_VOICE_ENABLED": "true",
+    "GMAIL_PERSONAL_INGEST_ENABLED": "true",
+    "PERSONAL_GMAIL_SEND_ENABLED": "true",
+    "GOOGLE_CALENDAR_SETUP_ENABLED": "true",
+    "GOOGLE_CALENDAR_ENABLED": "false",
+    "TELEGRAM_RELAY_ENABLED": "true",
+    "DAILY_BRIEF_ENABLED": "false",
+    "OUTLOOK_SETUP_ENABLED": "false",
+    "OUTLOOK_POLL_ENABLED": "false"
   },
   "d1_databases": [
     {
