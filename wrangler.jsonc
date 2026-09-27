@@ -9,7 +9,10 @@
     "WORK_DOMAIN": "fmedia.kz",
     "TZ_OFFSET_MINUTES": "300",
     "MAIL_INGEST_ENABLED": "false",
-    "WORKER_EMAIL_NOTIFICATIONS": "false"
+    "WORKER_EMAIL_NOTIFICATIONS": "false",
+    "WORK_EMAIL": "alexandr.petrossov@fmedia.kz",
+    "GMAIL_POLL_ENABLED": "false",
+    "REMINDERS_ENABLED": "false"
   },
   "d1_databases": [
     {
