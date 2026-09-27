@@ -10,7 +10,8 @@ const now=()=>new Date().toISOString();
 const seconds=()=>Math.floor(Date.now()/1000);
 const trim=(value,max)=>String(value??'').trim().slice(0,max);
 const TASK_MODES=new Set(['TASK_INPUT','TASK_DRAFT','TASK_CLARIFY','TASK_TARGET','TASK_ACTION',
-  'CALENDAR_INPUT','PERSONAL_MAIL_INPUT','RELAY_INPUT']);
+  'CALENDAR_INPUT','PERSONAL_MAIL_INPUT','RELAY_INPUT',
+  'TASK_POSTPONE','TASK_POSTPONE_CONFIRM']);
 const approved={chat:'chat',create_task:'create_task',tasks:'tasks',report:'report',
   task_done:'task_done',task_delete:'task_delete',task_progress:'task_progress',
   create_event:'create_event',calendar_today:'calendar_today',calendar_week:'calendar_week',
@@ -245,6 +246,40 @@ export async function taskMenuAction(env,chatId,action) {
   return null;
 }
 export async function taskCallback(env,chatId,callback,updateId) {
+  if(callback==='task:postpone:cancel'){
+    const prior=await state(env,chatId);
+    if(['TASK_POSTPONE','TASK_POSTPONE_CONFIRM'].includes(prior?.mode))
+      await clearState(env,chatId);
+    return {text:'Перенос отменён. Срок не изменён.',reply_markup:backMarkup()};
+  }
+  if(callback==='task:postpone:confirm'){
+    const prior=await state(env,chatId);
+    if(prior?.mode!=='TASK_POSTPONE_CONFIRM')
+      return {text:'Подтверждение устарело. Срок не изменён.',reply_markup:backMarkup()};
+    const data=unpack(prior);
+    const iso=validDue(data.due_iso);
+    if(!iso||!data.task_id)
+      return {text:'Неверная дата. Срок не изменён.',reply_markup:backMarkup()};
+    const updated=await env.DB.prepare(
+      "UPDATE tasks SET due_iso=?,due_text=?,updated_at=? "+
+      "WHERE task_id=? AND status NOT IN ('DONE','DELETED')"
+    ).bind(iso,trim(data.due_text,100),now(),data.task_id).run();
+    await clearState(env,chatId);
+    return {text:updated.meta.changes===1?
+      '📅 Новый срок задачи «'+trim(data.title,180)+'»: '+trim(data.due_text,100):
+      'Задача уже закрыта или не найдена. Срок не изменён.',reply_markup:backMarkup()};
+  }
+  if(callback.startsWith('task:postpone:')){
+    const id=callback.slice('task:postpone:'.length);
+    const task=await env.DB.prepare(
+      "SELECT task_id,title FROM tasks WHERE task_id=? "+
+      "AND status NOT IN ('DONE','DELETED')"
+    ).bind(id).first();
+    if(!task)return {text:'Активная задача не найдена.',reply_markup:backMarkup()};
+    await setState(env,chatId,'TASK_POSTPONE',task);
+    return {text:'На какую дату и время перенести «'+trim(task.title,150)+'»?',
+      reply_markup:backMarkup()};
+  }
   if(callback==='task:new:save')return saveDraft(env,chatId,updateId);
   if(callback==='task:new:cancel') {
     const pending=await state(env,chatId);
@@ -300,6 +335,34 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
       return calendarFollowup(env,chatId,user,event);
     }catch{return {text:'Не понял изменение. Уточни дату, время или название события.',
       reply_markup:backMarkup()};}
+  }
+  if(current?.mode==='TASK_POSTPONE_CONFIRM'){
+    if(/^(да|подтверждаю|сохрани|перенеси)$/i.test(user))
+      return taskCallback(env,chatId,'task:postpone:confirm',updateId);
+    return {text:'Нажми «Перенести» или «Отмена».',
+      reply_markup:{inline_keyboard:[
+        [{text:'✅ Перенести',callback_data:'task:postpone:confirm'},
+         {text:'❌ Отмена',callback_data:'task:postpone:cancel'}]
+      ]}};
+  }
+  if(current?.mode==='TASK_POSTPONE'){
+    let parsed;
+    try {
+      parsed=await interpret(env,chatId,user,{mode:'TASK_POSTPONE',previous:data,
+        instruction:'Extract a new due_iso ISO datetime UTC+05:00 and due_text from the latest message. Do not create any new task.'});
+    }catch{return {text:'Не разобрал новую дату. Напиши, например: «Завтра к 15:00».',
+      reply_markup:backMarkup()};}
+    if(!validDue(parsed?.due_iso))
+      return {text:'Уточни новую дату и время задачи. Например: «Завтра в 15:00».',
+        reply_markup:backMarkup()};
+    const d={...data,due_iso:parsed.due_iso,due_text:parsed.due_text||parsed.due_iso};
+    await setState(env,chatId,'TASK_POSTPONE_CONFIRM',d);
+    return {text:'📅 Перенести «'+trim(data.title,160)+'» на '+
+      trim(d.due_text,120)+'? Сохраню срок только после подтверждения.',
+      reply_markup:{inline_keyboard:[
+        [{text:'✅ Перенести',callback_data:'task:postpone:confirm'},
+         {text:'❌ Отмена',callback_data:'task:postpone:cancel'}]
+      ]}};
   }
   if(current?.mode==='TASK_TARGET')return resolveTarget(env,chatId,data.intent,user);
   if(current?.mode==='TASK_ACTION')
