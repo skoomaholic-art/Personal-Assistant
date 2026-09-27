@@ -6,6 +6,7 @@ import {
 import {pollGmail, ingestGmailId} from './gmail.js';
 import {runReminders} from './reminders.js';
 import {createDraftPreview, editDraftPreview, cancelDraftPreview, loadDraft, draftPreview} from './drafts.js';
+import {prepareGmailDraft, gmailSendPreview, confirmGmailSend} from './gmail-compose.js';
 
 const JSON_HEADERS = {'content-type':'application/json; charset=utf-8', 'cache-control':'no-store'};
 const ok = (data, status = 200) => Response.json(data, {status, headers:JSON_HEADERS});
@@ -275,6 +276,13 @@ async function prepareAnswer(update, env) {
     await setState(env,chatId,'REPLY_INSTRUCTION',id);
     return {text:'Что ответить на письмо «'+safeText(email.subject,180)+'»? Напиши своими словами. Я подготовлю локальный черновик. /cancel - отмена.',reply_markup:backMarkup()};
   }
+  if (callback?.startsWith('preparegmail:')) {
+    if (env.GMAIL_DRAFTS_ENABLED!=='true'||env.REPLY_PREVIEWS_ENABLED!=='true')
+      return {text:'Создание Gmail-черновиков пока выключено.',reply_markup:backMarkup()};
+    const id=callback.slice('preparegmail:'.length);
+    const draft=await prepareGmailDraft(env,id);
+    return gmailSendPreview(draft,env.GMAIL_SEND_ENABLED==='true');
+  }
   if (callback?.startsWith('editdraft:')) {
     if(env.REPLY_PREVIEWS_ENABLED!=='true') return {text:'Редактор черновиков выключен.',reply_markup:backMarkup()};
     const id=callback.slice('editdraft:'.length);
@@ -288,10 +296,15 @@ async function prepareAnswer(update, env) {
     const id=callback.slice('canceldraft:'.length);
     const cancelled=await cancelDraftPreview(env,id);
     await clearState(env,chatId);
-    return {text:cancelled?'Локальный черновик отменён. Письмо не отправлено.':'Черновик уже отменён или не найден.',reply_markup:backMarkup()};
+    return {text:cancelled?'Черновик отменён. Письмо не отправлено. Если Gmail-черновик был создан, он остаётся в папке «Черновики» для ручного удаления.':'Черновик уже отправлен, обрабатывается, отменён или не найден.',reply_markup:backMarkup()};
   }
   if (callback?.startsWith('senddraft:')) {
-    return {text:'Отправка email с нового сервера заблокирована. Нужно сверить оригинал Gmail, адресата, alias, тему, вложения и получить отдельное подтверждение.',reply_markup:backMarkup()};
+    // A one-time preview token is required even after the global send flag
+    // has been enabled. No other Telegram text can trigger outbound Gmail.
+    const parts=callback.split(':');
+    if(parts.length!==3) return {text:'Подтверждение устарело. Письмо не отправлено.',reply_markup:backMarkup()};
+    const result=await confirmGmailSend(env,parts[1],parts[2]);
+    return {...result,reply_markup:backMarkup()};
   }
   if (callback) return {text:'Эта кнопка пока недоступна в тестовой версии.',reply_markup:backMarkup()};
   const text=String(update?.message?.text||'').trim();
@@ -305,12 +318,12 @@ async function prepareAnswer(update, env) {
   if (state?.mode==='REPLY_INSTRUCTION' && env.REPLY_PREVIEWS_ENABLED==='true') {
     const draft=await createDraftPreview(env,state.data,text);
     await clearState(env,chatId);
-    return draftPreview(draft);
+    return draftPreview(draft,env);
   }
   if (state?.mode==='DRAFT_EDIT' && env.REPLY_PREVIEWS_ENABLED==='true') {
     const draft=await editDraftPreview(env,state.data,text);
     await clearState(env,chatId);
-    return draftPreview(draft);
+    return draftPreview(draft,env);
   }
   return await groqChat(env,chatId,text,update.update_id);
 }
