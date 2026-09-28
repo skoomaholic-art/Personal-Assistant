@@ -1,4 +1,5 @@
 import {backMarkup,hasValidSecret,normalizePriority,safeText,taskMarkup} from './router.js';
+import {triageTelegram} from './work-triage.js';
 
 const cap=(value,max)=>String(value??'').trim().slice(0,max);
 const now=()=>Math.floor(Date.now()/1000);
@@ -45,6 +46,14 @@ export async function ingestTelegramMention(request,env){
       return json({error:'private_chat_not_allowed'},403);
   }else if(data.source_type==='private'||!chatId.startsWith('-')||!allowed(chatId,env.TELEGRAM_MENTION_CHAT_IDS))
     return json({error:'chat_not_allowed'},403);
+  // In work-only mode an allowlisted private contact is not sufficient
+  // evidence that every message is work. Reject uncertain personal text
+  // before persisting it in D1 or passing it to any AI.
+  const triage=triageTelegram(data.text,{
+    privateChat:isPrivate,workOnly:env.ASSISTANT_SCOPE==='work'
+  });
+  if(triage.category==='SKIP')
+    return json({ok:true,ignored_nonwork:true},202);
   const id=chatId+':'+data.message_id;
   const link=!isPrivate&&LINK.test(String(data.link||''))?String(data.link):'';
   const mediaKind=['photo','document'].includes(data.media_kind)?data.media_kind:'';
@@ -68,14 +77,18 @@ export async function ingestTelegramMention(request,env){
 
 async function analyze(env,entry){
   const summary=cap(entry.body.replace(/\s+/g,' '),180);
+  const classified=triageTelegram(entry.body,{
+    privateChat:entry.signal==='private',workOnly:env.ASSISTANT_SCOPE==='work'
+  });
   const simple={
-    category:taskWords.test(entry.body)?'TASK':'NEWS',
-    title:summary,
-    summary,
-    priority:low.test(entry.body)?'низкий':urgent.test(entry.body)?'высокий':'средний'
+    category:classified.category==='SKIP'?'REVIEW':classified.category,
+    title:summary,summary,priority:classified.priority||'средний'
   };
-  // Do not send private or corporate Telegram text to a model without explicit approval.
-  if(entry.signal==='private'||env.TELEGRAM_MENTIONS_AI_ENABLED!=='true'||!env.GROQ_API_KEY)return simple;
+  // Keep uncertain items as owner-review, never use external AI to invent
+  // personal intent. A private message is never sent to Groq.
+  if(simple.category==='REVIEW'||entry.signal==='private'||
+    env.TELEGRAM_MENTIONS_AI_ENABLED!=='true'||!env.GROQ_API_KEY)
+    return simple;
   try{
     const response=await fetch('https://api.groq.com/openai/v1/chat/completions',{
       method:'POST',
@@ -105,10 +118,11 @@ async function analyze(env,entry){
 }
 function details(row){
   const privateChat=row.signal==='private';
-  const source=privateChat?'Личная переписка':(row.chat_title||row.chat_id);
-  return safeText('💬 Telegram | '+(privateChat?'Личное сообщение':row.category==='TASK'?'Задача':'Новости')+
+  const source=privateChat?'Разрешённый контакт':(row.chat_title||row.chat_id);
+  const label=row.category==='TASK'?'Задача':row.category==='REVIEW'?'На разбор':'Новости';
+  return safeText('💬 Telegram | '+label+
     '\n\nОт: '+(row.sender_name||row.sender_id||'Участник')+
-    '\nКатегория: '+(row.category==='TASK'?'Задача':'Новости')+
+    '\nКатегория: '+label+
     '\nВажность: '+row.priority+'\n\nСообщение:\n'+row.body+
     '\n\nИсточник: '+source+(row.source_link?'\nОткрыть сообщение: '+row.source_link:''));
 }
@@ -117,15 +131,16 @@ export async function telegramMentionDetails(env,id){
     .bind(id).first();
   if(!row)return {text:'Сообщение не найдено.',reply_markup:backMarkup()};
   return {text:details(row),
-    reply_markup:row.category==='TASK'&&row.task_id?taskMarkup(row.task_id):backMarkup()};
+    reply_markup:row.category==='REVIEW'?reviewMarkup(row.id):
+      row.category==='TASK'&&row.task_id?taskMarkup(row.task_id):backMarkup()};
 }
-export async function latestTelegramMentions(env,limit=3){
-  if(env.TELEGRAM_MENTIONS_ENABLED!=='true')return [];
+export async function latestTelegramMentions(env,limit=3,category='NEWS'){
+  if(env.TELEGRAM_MENTIONS_ENABLED!=='true'||!['NEWS','REVIEW'].includes(category))return [];
   try{
     const found=await env.DB.prepare(
-      "SELECT id,chat_title,sender_name,summary,source_link FROM telegram_mentions "+
-      "WHERE category='NEWS' AND status='done' ORDER BY created_at DESC LIMIT ?"
-    ).bind(limit).all();
+      "SELECT id,chat_title,sender_name,summary,source_link,category,created_at FROM telegram_mentions "+
+      "WHERE category=? AND status='done' ORDER BY created_at DESC LIMIT ?"
+    ).bind(category,limit).all();
     return found.results||[];
   }catch(error){
     console.error(JSON.stringify({event:'telegram_mention_list_failed',type:error?.name||'Error'}));
