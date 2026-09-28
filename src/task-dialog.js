@@ -1,6 +1,7 @@
 import {backMarkup,taskMarkup,safeText,normalizePriority} from './router.js';
 import {proposeCalendar,calendarAgenda,calendarFollowup} from './calendar.js';
 import {outlookAgenda} from './outlook.js';
+import {latestNews} from './news.js';
 import {draftPersonalMail} from './personal-mail.js';
 import {proposeRelay,inviteRelayContact,listRelayContacts} from './telegram-relay.js';
 import {proposeMemory,showMemory,forgetMemory,personalMemory} from './memory.js';
@@ -18,7 +19,8 @@ const approved={chat:'chat',create_task:'create_task',tasks:'tasks',report:'repo
   create_event:'create_event',calendar_today:'calendar_today',calendar_week:'calendar_week',
   draft_email:'draft_email',relay_message:'relay_message',relay_invite:'relay_invite',
   contacts:'contacts',remember:'remember',show_memory:'show_memory',forget_memory:'forget_memory',
-  outlook_today:'outlook_today',outlook_week:'outlook_week'};
+  outlook_today:'outlook_today',outlook_week:'outlook_week',
+  public_news:'public_news'};
 const pendingMarkup={inline_keyboard:[
   [{text:'✅ Сохранить',callback_data:'task:new:save'},{text:'✏️ Изменить',callback_data:'task:new:change'}],
   [{text:'❌ Отменить',callback_data:'task:new:cancel'},{text:'☰ Меню',callback_data:'menu'}]
@@ -95,7 +97,7 @@ async function interpret(env,chatId,text,context) {
     instruction:{type:'string'},start_iso:{type:'string'},end_iso:{type:'string'},
     location:{type:'string'},calendar_target:{type:'string',enum:['personal','work']},
     recipient:{type:'string'},message:{type:'string'},
-    note:{type:'string'},memory_index:{type:'string'}
+    note:{type:'string'},memory_index:{type:'string'},news_query:{type:'string'}
   };
   const system=[
     'Ты Персональный помощник Александра. Ответ строго JSON по заданной схеме.',
@@ -107,6 +109,7 @@ async function interpret(env,chatId,text,context) {
     'draft_email: точный адрес в to, тема subject, просьба в instruction. НЕ выдумывай email.',
     'relay_message: recipient и message. Бот пишет только подключившимся получателям.',
     'relay_invite: пригласить recipient. contacts: подключённые получатели.',
+    'public_news: запрос свежих внешних новостей; news_query содержит тему, по умолчанию Казахстан. Нельзя выдумывать новости.',
     'remember: явно сохранить note. show_memory: показать заметки. forget_memory: номер memory_index.',
     'Если не хватает email, темы, даты, времени или имени, задай один уточняющий вопрос.',
     'Создание, удаление и смена статуса никогда не выполнены на этапе распознавания. Не утверждай, что запись сохранена или удалена.',
@@ -460,6 +463,7 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
   if(intent.intent==='relay_invite')
     return inviteRelayContact(env,chatId,intent.recipient);
   if(intent.intent==='contacts')return listRelayContacts(env);
+  if(intent.intent==='public_news')return latestNews(intent.news_query||'Казахстан');
   if(intent.intent==='remember')return proposeMemory(env,chatId,intent.note);
   if(intent.intent==='show_memory')return showMemory(env,chatId);
   if(intent.intent==='forget_memory')return forgetMemory(env,chatId,intent.memory_index);
