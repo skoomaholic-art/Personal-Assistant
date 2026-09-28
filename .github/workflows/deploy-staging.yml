@@ -48,7 +48,36 @@ jobs:
           process.stdout.write('::add-mask::' + token + '\n');
           fs.appendFileSync(process.env.GITHUB_ENV, 'CLOUDFLARE_API_TOKEN=' + token + '\n');
           NODE
-      - name: Ensure idempotent Telegram inbox schema exists on existing D1
+      - name: Inspect D1 schema before optional migration
+        id: mentions_schema
+        run: |
+          npx --yes wrangler@4 d1 execute rahal-mamut-staging --remote --command "SELECT COUNT(*) AS present FROM sqlite_master WHERE type = 'table' AND name = 'telegram_mentions'" --json --config=wrangler.jsonc > "$RUNNER_TEMP/mentions-schema.json"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const data = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/mentions-schema.json', 'utf8'));
+          const blocks = Array.isArray(data) ? data : [data];
+          const row = blocks.flatMap(item => item.results || item.result || []).find(item => Object.hasOwn(item, 'present'));
+          const present = Number(row?.present);
+          if (![0, 1].includes(present)) throw Error('Cannot determine existing D1 schema safely');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'present=' + (present ? 'true' : 'false') + '\n');
+          console.log('Telegram inbox schema: ' + (present ? 'already exists, skipping migration' : 'missing, will create'));
+          NODE
+      - name: Create Telegram inbox schema only when absent
+        if: steps.mentions_schema.outputs.present == 'false'
         run: npx --yes wrangler@4 d1 execute rahal-mamut-staging --remote --file=migrations/0006_telegram_mentions.sql --config=wrangler.jsonc
       - name: Publish existing staging Worker
         run: npx --yes wrangler@4 deploy --config=wrangler.jsonc
+      - name: Report readiness without disclosing Cloudflare secrets
+        run: |
+          if npx --yes wrangler@4 secret list --name rahal-mamut-staging --format json --config=wrangler.jsonc > "$RUNNER_TEMP/secret-names.json"; then
+            node <<'NODE'
+          const fs = require('node:fs');
+          const entries = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/secret-names.json', 'utf8'));
+          if (!Array.isArray(entries)) throw Error('Unknown Cloudflare secret-list format');
+          const names = new Set(entries.map(item => item.name));
+          const checks = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_WEBHOOK_SECRET', 'TELEGRAM_CHAT_ID', 'TELEGRAM_MENTION_INGEST_SECRET', 'SETUP_PASSWORD', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GROQ_API_KEY'];
+          for (const key of checks) console.log(key + ': ' + (names.has(key) ? 'configured' : 'MISSING'));
+          NODE
+          else
+            echo '::warning::Could not inspect Cloudflare secret names; worker was already deployed.'
+          fi
