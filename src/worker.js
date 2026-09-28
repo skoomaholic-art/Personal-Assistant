@@ -18,7 +18,7 @@ import {dailyBriefPreview,runDailyBrief} from './brief.js';
 import {startOutlookOAuth,completeOutlookOAuth,pollOutlook,outlookAgenda} from './outlook.js';
 import {miniApp} from './miniapp.js';
 import {latestNews} from './news.js';
-import {ingestTelegramMention,processTelegramMention,telegramMentionDetails,latestTelegramMentions} from './telegram-mentions.js';
+import {ingestTelegramMention,processTelegramMention,telegramMentionDetails,latestTelegramMentions,reviewTelegramMention} from './telegram-mentions.js';
 import {connectionStatus} from './admin.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
@@ -296,31 +296,81 @@ async function prepareAnswer(update, env) {
         reply_markup:backMarkup()};
   if(action==='memory')return showMemory(env,chatId);
   if(action==='brief')return dailyBriefPreview(env);
-  if (action==='mail') {
-    if(env.GMAIL_POLL_ENABLED!=='true')
-      return {text:'Проверка Gmail сейчас выключена.',reply_markup:backMarkup()};
-    const result=await pollGmail(env);
-    return {text:'📨 Почта проверена. Просмотрено писем: '+result.scanned+
-      '. Новых для анализа: '+result.queued+
-      '. Записи появятся в задачах после обработки очереди.',reply_markup:backMarkup()};
+  if(action==='mail'||action==='mail:refresh'){
+    let info='';
+    if(action==='mail:refresh'){
+      if(env.GMAIL_POLL_ENABLED!=='true')
+        return {text:'Проверка Gmail сейчас выключена.',reply_markup:backMarkup()};
+      const result=await pollGmail(env);
+      info='Обновление запущено: найдено '+result.queued+
+        ' новых писем. Обработка идёт в очереди.\\n\\n';
+    }
+    const rows=await listEmails(env,"status IN ('NEW','WORK_REVIEW','WORK_OUTLOOK')");
+    const view=fromRows('📨 Рабочая почта',rows,'email');
+    return {...view,text:info+view.text,
+      reply_markup:{inline_keyboard:[
+        ...view.reply_markup.inline_keyboard.slice(0,-1),
+        [{text:'🔄 Обновить',callback_data:'mail:refresh'},
+         {text:'⚠️ На разбор',callback_data:'review'}],
+        [{text:'☰ Меню',callback_data:'menu'}]
+      ]}};
+  }
+  if(action==='review'){
+    const [letters,telegram]=await Promise.all([
+      listEmails(env,"status='WORK_REVIEW'"),
+      latestTelegramMentions(env,8,'REVIEW')
+    ]);
+    if(!letters.length&&!telegram.length)
+      return {text:'⚠️ На разбор\\n\\nНовых неопределённых рабочих сообщений нет.',
+        reply_markup:backMarkup()};
+    const lines=['⚠️ На разбор'];
+    const keyboard=[];
+    for(const letter of letters.slice(0,5)){
+      lines.push('\\n📨 '+safeText(letter.subject,140)+
+        '\\n'+safeText(letter.summary,200));
+      keyboard.push([{text:'📨 '+safeText(letter.subject,36),
+        callback_data:'email:view:'+letter.email_id}]);
+    }
+    for(const msg of telegram.slice(0,5)){
+      lines.push('\\n💬 '+safeText(msg.summary,180)+
+        '\\nОт: '+safeText(msg.sender_name,80));
+      keyboard.push([{text:'💬 '+safeText(msg.summary,36),
+        callback_data:'mention:view:'+msg.id}]);
+    }
+    keyboard.push([{text:'☰ Меню',callback_data:'menu'}]);
+    return {text:safeText(lines.join('\\n')),
+      reply_markup:{inline_keyboard:keyboard}};
   }
   if (action==='important') return fromRows('🔥 Важное',await listEmails(env,"priority='высокий' OR category='ВАЖНО'"),'email');
   if (action==='news'){
-    const userText=String(update?.message?.text||'');
+    const userText=String(update?.message?.text||'').trim();
+    const topical=/(?:новост[ьи]|что нового)\\s+(?:про|о|об|в|по|за|на)?\\s*\\S+/i.test(userText);
     const query=userText.replace(/^.*?(?:новост[ьи]|что нового)/i,'')
-      .replace(/^(?:про|о|об|в|по|за|на)\s+/i,'').trim().slice(0,90)||'Казахстан';
-    const [external,fromMail,fromTelegram]=await Promise.all([
-      latestNews(query),
+      .replace(/^(?:про|о|об|в|по|за|на)\\s+/i,'').trim().slice(0,90);
+    const [fromMail,fromTelegram,external]=await Promise.all([
       listEmails(env,"category IN ('НОВОСТЬ','FYI') AND action='Действий не требуется'"),
-      latestTelegramMentions(env)
+      latestTelegramMentions(env,5),
+      topical?latestNews(query||'OTT Казахстан'):
+        (!workOnly(env)?latestNews('Казахстан'):Promise.resolve(null))
     ]);
-    const inbox=fromMail.slice(0,3).map(x=>'• '+val(x.subject,100)).join('\n');
-    const mentions=fromTelegram.map(x=>'• '+val(x.summary,120)+' ('+val(x.chat_title,55)+')').join('\n');
-    return {text:safeText((mentions?'💬 Упоминания в Telegram:\n'+mentions+'\n\n':'')+
-      (inbox?'📬 Из твоей почты:\n'+inbox+'\n\n':'')+external.text),
+    const inbox=fromMail.slice(0,5).map(x=>'• '+val(x.subject,115)).join('\\n');
+    const mentions=fromTelegram.map(x=>'• '+val(x.summary,120)+
+      ' ('+val(x.chat_title,55)+')').join('\\n');
+    const sections=[
+      '📰 Рабочие новости',
+      mentions?'💬 Из Telegram:\\n'+mentions:'',
+      inbox?'📨 Из почты:\\n'+inbox:'',
+      external?external.text:'',
+      !mentions&&!inbox&&!external?'Пока новых рабочих новостей нет.':''
+    ].filter(Boolean);
+    return {text:safeText(sections.join('\\n\\n')),
       reply_markup:{inline_keyboard:[
-        ...fromTelegram.map(x=>[{text:'💬 '+safeText(x.summary,35),callback_data:'mention:view:'+x.id}]),
-        [{text:'☰ Меню',callback_data:'menu'}]
+        ...fromTelegram.map(x=>[{text:'💬 '+safeText(x.summary,35),
+          callback_data:'mention:view:'+x.id}]),
+        ...fromMail.slice(0,3).map(x=>[{text:'📨 '+safeText(x.subject,35),
+          callback_data:'email:view:'+x.email_id}]),
+        [{text:'⚠️ На разбор',callback_data:'review'},
+         {text:'☰ Меню',callback_data:'menu'}]
       ]}};
   }
   if (action==='colleagues') {
@@ -346,6 +396,9 @@ async function prepareAnswer(update, env) {
   if (action==='search') {
     await setState(env,chatId,'SEARCH');
     return {text:'Что ищем в сохранённых письмах? /cancel - отмена.',reply_markup:backMarkup()};
+  }
+  if(/^mention:(task|news|ignore):/.test(callback||'')){
+    return reviewTelegramMention(env,callback);
   }
   if (callback?.startsWith('mention:view:')) {
     return telegramMentionDetails(env,callback.slice('mention:view:'.length));
@@ -615,7 +668,11 @@ async function processEmail(job,env) {
   const claim=await env.DB.prepare("UPDATE emails SET notification_status='unknown' WHERE email_id=? AND notification_status='queued'").bind(job.email_id).run();
   if(claim.meta.changes!==1) return;
   const notice='📨 '+e.category+'\n\nТема: '+e.subject+'\nОт: '+e.from_name+'\n\n'+e.summary+'\n\nДействие: '+e.action;
-  await send(env,env.TELEGRAM_CHAT_ID,{text:notice,reply_markup:emailMarkup(e.email_id)});
+  await send(env,env.TELEGRAM_CHAT_ID,{
+    text:notice,
+    ...(env.WORKER_EMAIL_WORKER_CALLBACKS_ENABLED==='true'?
+      {reply_markup:emailMarkup(e.email_id)}:{})
+  });
   await env.DB.prepare("UPDATE emails SET notification_status='sent' WHERE email_id=?").bind(e.email_id).run();
 }
 export default {
