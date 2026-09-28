@@ -15,7 +15,7 @@ import urllib.request
 from datetime import timezone
 from pathlib import Path
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils
 
 LOG = logging.getLogger("telegram-mentions")
 USER_REF = re.compile(r"(?<![A-Za-z0-9_])@skoomaholic(?=$|[^A-Za-z0-9_])", re.IGNORECASE)
@@ -87,7 +87,7 @@ async def run(args):
         if args.list_chats:
             async for dialog in client.iter_dialogs():
                 kind = "private" if dialog.is_user else "group" if dialog.is_group else "channel"
-                print(f"{dialog.id}\t{kind}\t{dialog.name}")
+                print(f"{utils.get_peer_id(dialog.entity)}\t{kind}\t{dialog.name}")
             return
         if not owner or not owner.id:
             raise SystemExit("Telegram account was not authorized")
@@ -152,4 +152,6 @@ if __name__ == "__main__":
     parser.add_argument("--list-chats", action="store_true", help="List chat IDs locally to configure work allowlist")
     arguments = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    if hasattr(__import__("sys").stdout, "reconfigure"):
+        __import__("sys").stdout.reconfigure(errors="replace")
     asyncio.run(run(arguments))
