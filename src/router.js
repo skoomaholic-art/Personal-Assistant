@@ -9,7 +9,7 @@ export function commandOf(update) {
     '/cancel': 'cancel', 'отмена': 'cancel', '/reset': 'reset',
     '/today': 'today', '/week': 'week', '/important': 'important',
     '/news': 'news', '/colleagues': 'colleagues', '/search': 'search',
-    '/tasks': 'tasks', '/report': 'report', '/new': 'newtask', '/mail': 'mail',
+    '/tasks': 'tasks', '/progress': 'progress', '/done': 'done', '/report': 'report', '/new': 'newtask', '/mail': 'mail',
     '/calendar': 'calendar', '/compose': 'compose', '/contacts': 'contacts',
     '/memory': 'memory', '/brief': 'brief', '/app': 'app'
   };
@@ -19,6 +19,8 @@ export function commandOf(update) {
   if (lower.includes('на неделю')) return 'week';
   if (lower.includes('новост')) return 'news';
   if (lower.includes('коллег') && lower.includes('письм')) return 'colleagues';
+  if (lower === 'задачи в работе' || lower === 'в работе') return 'progress';
+  if (lower === 'выполненные' || lower === 'выполненные задачи') return 'done';
   if (lower === 'список задач' || lower === 'покажи задачи' || lower === 'мои задачи') return 'tasks';
   if (lower === 'отчёт по задачам' || lower === 'отчет по задачам') return 'report';
   if (lower === 'проверь почту' || lower === 'проверить почту') return 'mail';
@@ -46,24 +48,29 @@ export function menuMarkup(miniAppUrl='') {
     ? {text:'📱 Панель',web_app:{url:miniAppUrl}}
     : {text:'🎙 Голосом',callback_data:'voicehelp'};
   return {inline_keyboard: [
-    [{text:'🔥 Важное',callback_data:'important'},{text:'✅ Сегодня',callback_data:'today'}],
-    [{text:'📅 Неделя',callback_data:'week'},{text:'📋 Задачи',callback_data:'tasks'}],
-    [{text:'🗓 Календарь',callback_data:'calendar'},{text:'✉️ Написать',callback_data:'compose'}],
-    [{text:'📰 Новости',callback_data:'news'},{text:'👥 Коллеги',callback_data:'colleagues'}],
+    [{text:'📥 Задачи',callback_data:'tasks'},{text:'🟡 В работе',callback_data:'progress'}],
+    [{text:'✅ Выполненные',callback_data:'done'},{text:'📰 Новости',callback_data:'news'}],
+    [{text:'📨 Почта',callback_data:'mail'},{text:'➕ Новая задача',callback_data:'newtask'}],
     [{text:'🔎 Поиск',callback_data:'search'},{text:'📊 Отчёт',callback_data:'report'}],
-    [{text:'📨 Почта',callback_data:'mail'},{text:'➕ Задача',callback_data:'newtask'}],
-    [{text:'🧠 Память',callback_data:'memory'},{text:'👥 Контакты',callback_data:'contacts'}],
-    [panel,{text:'🧹 Очистить чат',callback_data:'reset'}]
+    [{text:'🗓 Календарь',callback_data:'calendar'},{text:'✉️ Написать',callback_data:'compose'}],
+    [panel,{text:'☰ Ещё',callback_data:'more'}]
   ]};
 }
+export function moreMarkup(){return {inline_keyboard:[
+  [{text:'🔥 Важное',callback_data:'important'},{text:'📅 Неделя',callback_data:'week'}],
+  [{text:'👥 Коллеги',callback_data:'colleagues'},{text:'🧠 Память',callback_data:'memory'}],
+  [{text:'👥 Контакты',callback_data:'contacts'},{text:'🧹 Очистить чат',callback_data:'reset'}],
+  [{text:'☰ Главное',callback_data:'menu'}]
+]};}
 export function backMarkup() { return {inline_keyboard:[[{text:'☰ Меню',callback_data:'menu'}]]}; }
 export function emailMarkup(emailId) { return {inline_keyboard:[
   [{text:'✅ В задачи',callback_data:'email:task:'+emailId},
    {text:'✉️ Черновик',callback_data:'email:reply:'+emailId}],
   [{text:'☰ Меню',callback_data:'menu'}]
 ]}; }
-export function taskMarkup(taskId) { return {inline_keyboard:[
-  [{text:'🟡 В работу',callback_data:'task:progress:'+taskId},{text:'✅ Выполнено',callback_data:'task:done:'+taskId}],
+export function taskMarkup(taskId,status='NEW') { return {inline_keyboard:[
+  ...(status==='NEW' ? [[{text:'🟡 Взять в работу',callback_data:'task:progress:'+taskId}]] : []),
+  ...(status!=='DONE' ? [[{text:'✅ Выполнено',callback_data:'task:done:'+taskId}]] : []),
   [{text:'🗑 Удалить',callback_data:'task:delete:ask:'+taskId},{text:'☰ Меню',callback_data:'menu'}]
 ]}; }
 export function normalizePriority(value) { return ['высокий','средний','низкий'].includes(value) ? value : 'средний'; }
