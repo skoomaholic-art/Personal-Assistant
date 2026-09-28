@@ -11,7 +11,7 @@ export function commandOf(update) {
     '/news': 'news', '/colleagues': 'colleagues', '/search': 'search',
     '/tasks': 'tasks', '/report': 'report', '/new': 'newtask', '/mail': 'mail',
     '/calendar': 'calendar', '/compose': 'compose', '/contacts': 'contacts',
-    '/memory': 'memory', '/brief': 'brief'
+    '/memory': 'memory', '/brief': 'brief', '/app': 'app'
   };
   if (exact[lower]) return exact[lower];
   if (lower.includes('что важного')) return 'important';
@@ -41,7 +41,10 @@ export function safeText(value, max = 3900) {
 }
 // Telegram chooses button widths. Two short, balanced labels per row
 // prevent the tall, irregular single-column menu seen in the old bot.
-export function menuMarkup() {
+export function menuMarkup(miniAppUrl='') {
+  const panel=/^https:\/\/[a-z0-9.-]+\/app$/i.test(String(miniAppUrl||''))
+    ? {text:'📱 Панель',web_app:{url:miniAppUrl}}
+    : {text:'🎙 Голосом',callback_data:'voicehelp'};
   return {inline_keyboard: [
     [{text:'🔥 Важное',callback_data:'important'},{text:'✅ Сегодня',callback_data:'today'}],
     [{text:'📅 Неделя',callback_data:'week'},{text:'📋 Задачи',callback_data:'tasks'}],
@@ -50,7 +53,7 @@ export function menuMarkup() {
     [{text:'🔎 Поиск',callback_data:'search'},{text:'📊 Отчёт',callback_data:'report'}],
     [{text:'📨 Почта',callback_data:'mail'},{text:'➕ Задача',callback_data:'newtask'}],
     [{text:'🧠 Память',callback_data:'memory'},{text:'👥 Контакты',callback_data:'contacts'}],
-    [{text:'🎙 Голосом',callback_data:'voicehelp'},{text:'🧹 Очистить чат',callback_data:'reset'}]
+    [panel,{text:'🧹 Очистить чат',callback_data:'reset'}]
   ]};
 }
 export function backMarkup() { return {inline_keyboard:[[{text:'☰ Меню',callback_data:'menu'}]]}; }
