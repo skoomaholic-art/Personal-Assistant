@@ -96,12 +96,17 @@ export async function connectionStatus(request,env) {
   return response({
     ok:Boolean(google.ok&&groq.ok),
     service:'Персональный помощник',phase:'staging',
+    assistant_scope:env.ASSISTANT_SCOPE||'unspecified',
     google,groq,mailbox,
     ...additional,
-    personal_mail_ingest_enabled:env.GMAIL_PERSONAL_INGEST_ENABLED==='true',
-    personal_mail_send_enabled:env.PERSONAL_GMAIL_SEND_ENABLED==='true',
+    personal_mail_ingest_enabled:env.ASSISTANT_SCOPE!=='work'&&
+      env.GMAIL_PERSONAL_INGEST_ENABLED==='true',
+    personal_mail_send_enabled:env.ASSISTANT_SCOPE!=='work'&&
+      env.PERSONAL_GMAIL_SEND_ENABLED==='true',
     calendar_enabled:env.GOOGLE_CALENDAR_ENABLED==='true'&&additional.calendar_connected,
     outlook_mail_enabled:env.OUTLOOK_POLL_ENABLED==='true'&&additional.outlook_connected,
+    work_calendar_enabled:env.OUTLOOK_CALENDAR_READ_ENABLED==='true'&&additional.outlook_connected,
+    work_mail_send_enabled:env.WORK_OUTLOOK_SEND_ENABLED==='true'&&additional.outlook_connected,
     telegram_connected:Boolean(env.TELEGRAM_BOT_TOKEN&&env.TELEGRAM_CHAT_ID),
     daily_brief_enabled:env.DAILY_BRIEF_ENABLED==='true',
     reminders_enabled:env.REMINDERS_ENABLED==='true',
