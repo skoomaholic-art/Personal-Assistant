@@ -19,6 +19,17 @@ from telethon import TelegramClient, events, utils
 
 LOG = logging.getLogger("telegram-mentions")
 USER_REF = re.compile(r"(?<![A-Za-z0-9_])@skoomaholic(?=$|[^A-Za-z0-9_])", re.IGNORECASE)
+# A private contact allowlist does not classify every private message as work.
+# Filter obvious nonwork locally, before text leaves the owner's machine.
+WORK_TOPIC = re.compile(
+    r"\\b(?:ott|epg|uefa|sport|live|email|outlook|design|deadline|banner|stream|"
+    r"content|release|draft|meeting|report|broadcast|schedule|promo)\\b|"
+    r"работ|коллег|задач|письм|почт|баннер|эфир|трансляц|турнир|футбол|"
+    r"матч|контент|платформ|дизайн|макет|логотип|материал|встреч|совещан|"
+    r"дедлайн|отч[её]т|таблиц|расписан|презентац|релиз|промокод|"
+    r"согласован|правообладател|подписк|отдел|редакци|канал|выпуск",
+    re.IGNORECASE,
+)
 CHAT_ID = re.compile(r"^-?[0-9]{1,20}$")
 
 
@@ -129,6 +140,9 @@ async def run(args):
             text = str(msg.raw_text or "").strip()
             if not text:
                 return  # No content to classify; do not download media.
+            if private and os.environ.get("TG_ASSISTANT_SCOPE", "work") == "work":
+                if not WORK_TOPIC.search(text):
+                    return  # Never export ambiguous private chat content.
             direct = private or bool(USER_REF.search(text) or getattr(msg, "mentioned", False))
             signal = "private" if private else "mention"
             if not private and not direct and msg.reply_to_msg_id:
