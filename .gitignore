@@ -6,3 +6,8 @@ node_modules/
 !.env.example
 *.log
 .DS_Store
+
+# MTProto user sessions contain account login credentials.
+.secrets/
+*.session
+*.session-journal

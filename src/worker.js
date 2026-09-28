@@ -18,6 +18,7 @@ import {dailyBriefPreview,runDailyBrief} from './brief.js';
 import {startOutlookOAuth,completeOutlookOAuth,pollOutlook,outlookAgenda} from './outlook.js';
 import {miniApp} from './miniapp.js';
 import {latestNews} from './news.js';
+import {ingestTelegramMention,processTelegramMention,telegramMentionDetails,latestTelegramMentions} from './telegram-mentions.js';
 import {connectionStatus} from './admin.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
@@ -308,13 +309,19 @@ async function prepareAnswer(update, env) {
     const userText=String(update?.message?.text||'');
     const query=userText.replace(/^.*?(?:новост[ьи]|что нового)/i,'')
       .replace(/^(?:про|о|об|в|по|за|на)\s+/i,'').trim().slice(0,90)||'Казахстан';
-    const [external,fromMail]=await Promise.all([
+    const [external,fromMail,fromTelegram]=await Promise.all([
       latestNews(query),
-      listEmails(env,"category IN ('НОВОСТЬ','FYI') AND action='Действий не требуется'")
+      listEmails(env,"category IN ('НОВОСТЬ','FYI') AND action='Действий не требуется'"),
+      latestTelegramMentions(env)
     ]);
     const inbox=fromMail.slice(0,3).map(x=>'• '+val(x.subject,100)).join('\n');
-    return {text:safeText((inbox?'📬 Из твоей почты:\n'+inbox+'\n\n':'')+
-      external.text),reply_markup:backMarkup()};
+    const mentions=fromTelegram.map(x=>'• '+val(x.summary,120)+' ('+val(x.chat_title,55)+')').join('\n');
+    return {text:safeText((mentions?'💬 Упоминания в Telegram:\n'+mentions+'\n\n':'')+
+      (inbox?'📬 Из твоей почты:\n'+inbox+'\n\n':'')+external.text),
+      reply_markup:{inline_keyboard:[
+        ...fromTelegram.map(x=>[{text:'💬 '+safeText(x.summary,35),callback_data:'mention:view:'+x.id}]),
+        [{text:'☰ Меню',callback_data:'menu'}]
+      ]}};
   }
   if (action==='colleagues') {
     const domain=String(env.WORK_DOMAIN || 'fmedia.kz').toLowerCase();
@@ -339,6 +346,9 @@ async function prepareAnswer(update, env) {
   if (action==='search') {
     await setState(env,chatId,'SEARCH');
     return {text:'Что ищем в сохранённых письмах? /cancel - отмена.',reply_markup:backMarkup()};
+  }
+  if (callback?.startsWith('mention:view:')) {
+    return telegramMentionDetails(env,callback.slice('mention:view:'.length));
   }
   if (callback?.startsWith('email:view:')) {
     const id=callback.slice('email:view:'.length);
@@ -652,6 +662,10 @@ export default {
         return ok({ok:false,phase:'staging',reason:'database_unavailable'},503);
       }
     }
+    if(request.method==='POST'&&path==='/internal/telegram/mention') {
+      try{return await ingestTelegramMention(request,env);}
+      catch(e){failLog('telegram_mention_ingest_failed',e);return ok({error:'temporary'},503);}
+    }
     if(request.method==='POST'&&path==='/telegram/webhook') {
       try { return await webhook(request,env); }
       catch(e){ failLog('webhook_error',e);return ok({error:'temporary'},503); }
@@ -672,6 +686,9 @@ export default {
         if (msg.body?.kind==='telegram') {
           const outcome=await processTelegram(msg.body,env);
           if(outcome==='busy') {msg.retry({delaySeconds:5});continue;}
+        } else if(msg.body?.kind==='telegram_mention') {
+          const outcome=await processTelegramMention(env,msg.body.id);
+          if(outcome==='busy'){msg.retry({delaySeconds:15});continue;}
         } else if(msg.body?.kind==='email') await processEmail(msg.body,env);
         else if(msg.body?.kind==='gmail_ingest') {
           const outcome=await ingestGmailId(env,msg.body.id);

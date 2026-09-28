@@ -55,3 +55,9 @@ Existing Google Apps Script bot remains the only live Telegram bot. No existing 
 6. Compare real response latency and confirm rollback path before any cutover of the existing Telegram webhook.
 
 Old Google Sheets tasks and Telegram chat history have not been bulk-migrated. New personal/work Gmail messages are ingested in staging; personal Gmail sends require per-message confirmation but have not been exercised on the real bot. Existing corporate alias Gmail send remains disabled. Outlook requires company consent. See the project README for the consolidated design.
+
+## 2026-09-28 - Личный Telegram / MTProto (код в staging)
+- Добавлены независимый Telethon listener и защищённый endpoint `/internal/telegram/mention`; существующий Bot API webhook не тронут. Listener требует отдельного долгоживущего процесса и Telegram user session.
+- `migrations/0006_telegram_mentions.sql` хранит сообщения, dedupe по chat_id/message_id, временный статус, источник и предварительную сортировку TASK/NEWS. Задачи попадают в NEW; при взятии в работу владелец выбирает важность. Новости Telegram видны в штатном разделе.
+- Внешний Groq анализ текста Telegram по умолчанию выключен; отправка Telegram-уведомлений от существующего бота также выключена. Есть обязательный выбор чатов и отдельный ключ приёма.
+- Личная авторизация, конфигурация секретов и чатов, D1-миграция, непрерывный запуск слушателя и публикация на Worker **ещё не выполнены**. Нет подтверждения живой доставки. Без тестов и без переключения webhook по просьбе владельца. См. `docs/TELEGRAM_MENTIONS.md`.
