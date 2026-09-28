@@ -3,6 +3,8 @@ import {calendarAgenda} from './calendar.js';
 import {outlookAgenda} from './outlook.js';
 import {personalMemory} from './memory.js';
 import {workOnly,WORK_EMAIL_STATUSES} from './work-mode.js';
+import {latestTelegramMentions,reviewTelegramMention} from './telegram-mentions.js';
+import {createTaskFromWorkEmail,categorizeReviewedWorkEmail} from './work-inbox.js';
 
 const json=(data,status=200)=>Response.json(data,{status,headers:{
   'content-type':'application/json; charset=utf-8','cache-control':'private, no-store',
@@ -46,17 +48,19 @@ small{display:block;color:var(--sub);margin:5px 0}
 input,textarea{display:block;width:100%;background:#101d15;color:var(--text);border:1px solid #40644d;border-radius:9px;padding:10px;margin:8px 0;font:inherit}
 textarea{min-height:65px}button{font:inherit;color:var(--text);background:#254632;border:1px solid #476b50;border-radius:9px;padding:8px 10px;margin:4px}
 button.save{background:var(--accent);color:#07190e;font-weight:700;border:0}
-nav{position:fixed;left:0;right:0;bottom:0;background:#13241a;border-top:1px solid var(--line);display:flex;justify-content:space-around;padding:8px 2px max(8px,env(safe-area-inset-bottom))}
+nav{position:fixed;left:0;right:0;bottom:0;background:#13241a;border-top:1px solid var(--line);display:flex;justify-content:space-around;flex-wrap:wrap;padding:8px 2px max(8px,env(safe-area-inset-bottom))}
 nav button{border:0;background:transparent;font-size:12px;padding:7px 2px}nav button[aria-current=true]{color:var(--accent)}
 .hidden{display:none}.body{white-space:pre-wrap;overflow-wrap:anywhere}.actions{display:flex;flex-wrap:wrap}
 </style></head><body><main><h1>Персональный помощник</h1>
 <p>Рабочие задачи, Outlook, встречи и информация в одном месте.</p><div id="notice"></div>
 <section id="home"></section><section id="tasks" class="hidden"></section>
-<section id="mail" class="hidden"></section><section id="calendar" class="hidden"></section>
+<section id="mail" class="hidden"></section><section id="news" class="hidden"></section>
+<section id="calendar" class="hidden"></section>
 <section id="memory" class="hidden"></section></main>
 <nav><button data-tab="home" aria-current="true">Главная</button>
 <button data-tab="tasks">Задачи</button><button data-tab="mail">Почта</button>
-<button data-tab="calendar">Календарь</button><button data-tab="memory">Память</button></nav>
+<button data-tab="news">Новости</button><button data-tab="calendar">Календарь</button>
+<button data-tab="memory">Память</button></nav>
 <script>
 (function(){
 const tg=window.Telegram&&window.Telegram.WebApp,notice=document.getElementById('notice');
@@ -84,6 +88,57 @@ async function show(tab){
     c.append(el('small',item.from_name+' · '+item.category));box.append(c);}
    if(!d.length)box.append(card('Почта','Нет новых писем.'));
   }
+  if(tab==='news'){
+   const data=await api('news');box.replaceChildren(el('h2','Рабочие новости'));
+   for(const item of data.telegram){
+    const c=card(item.summary,'Из Telegram · '+(item.chat_title||'Чат'));
+    c.append(el('small','От: '+(item.sender_name||'Участник')));
+    if(item.source_link&&item.source_link.startsWith('https://t.me/')){
+     const a=el('button','💬 Открыть исходное');
+     a.addEventListener('click',()=>tg.openTelegramLink(item.source_link));
+     c.append(a);
+    }box.append(c);
+   }
+   for(const item of data.mail){
+    const c=card(item.subject,item.summary);
+    c.append(el('small','📨 Рабочая почта · '+item.from_name));box.append(c);
+   }
+   if(!data.telegram.length&&!data.mail.length)
+    box.append(card('Новостей нет','Здесь появятся рабочие сообщения и рассылки.'));
+   box.append(el('h2','⚠️ На разбор'));
+   const decide=async(url,question)=>{
+    if(!window.confirm(question))return;
+    try{const response=await api(url,'POST');notice.textContent=response.text;
+      await show('news');notice.textContent=response.text;}
+    catch(error){notice.textContent=error.message;}
+   };
+   for(const item of data.telegram_review){
+    const c=card(item.summary,'Из Telegram · '+(item.chat_title||'Чат'));
+    c.append(el('small','От: '+(item.sender_name||'Участник')));
+    const actions=el('div',undefined,'actions');
+    for(const [action,label] of [
+      ['task','✅ В задачи'],['news','📰 В новости'],['ignore','🗑 Не рабочее']
+    ]){
+     const b=el('button',label);
+     b.addEventListener('click',()=>decide('telegram/'+encodeURIComponent(item.id)+'/'+action,
+       'Подтвердить: '+label+'?'));actions.append(b);
+    }c.append(actions);box.append(c);
+   }
+   for(const item of data.mail_review){
+    const c=card(item.subject,item.summary);
+    c.append(el('small','📨 Письмо · нужен разбор происхождения'));
+    const actions=el('div',undefined,'actions');
+    for(const [action,label] of [
+      ['task','✅ В задачи'],['news','📰 В новости'],['ignore','🗑 Не рабочее']
+    ]){
+     const b=el('button',label);
+     b.addEventListener('click',()=>decide('mail/'+encodeURIComponent(item.email_id)+'/'+action,
+       'Подтвердить: '+label+'?'));actions.append(b);
+    }c.append(actions);box.append(c);
+   }
+   if(!data.telegram_review.length&&!data.mail_review.length)
+    box.append(card('Всё разобрано','Неопределённых рабочих сообщений нет.'));
+  }
   if(tab==='calendar'){const d=await api('calendar');
    box.replaceChildren(...(d.work_only?[card('Рабочий Outlook',d.work)]:
      [card('Личный календарь',d.personal),card('Рабочий',d.work)]));}
@@ -104,7 +159,9 @@ async function show(tab){
     catch(err){notice.textContent=err.message;}});
    box.append(form);
    for(const task of d){const c=card(task.title,task.description);
-    c.append(el('small',(task.due_text||'Без срока')+' · '+task.status));
+    const origin=task.email_id?'📨 Из рабочей почты':
+      task.task_id.startsWith('tgm:')?'💬 Из Telegram':'➕ Добавлена вручную';
+    c.append(el('small',origin+' · '+(task.due_text||'Без срока')+' · '+task.status));
     const buttons=el('div',undefined,'actions');
     for(const pair of [['progress','🟡 В работу'],['done','✅ Выполнено'],['delete','🗑 Удалить']]){
      if(task.status==='DONE'&&pair[0]!=='delete')continue;
@@ -148,6 +205,41 @@ export async function miniApp(request,env){
         "status NOT IN ('ANALYZING','IGNORED_NONWORK')")+" "+
       "ORDER BY received_at DESC LIMIT 35"
     ).all();return json(rows.results||[]);
+  }
+  if(request.method==='GET'&&section==='news'){
+    const [telegram,telegram_review,mail,mail_review]=await Promise.all([
+      latestTelegramMentions(env,30,'NEWS'),
+      latestTelegramMentions(env,30,'REVIEW'),
+      env.DB.prepare(
+        "SELECT email_id,subject,summary,from_name,received_at FROM emails "+
+        "WHERE status IN ('NEW','WORK_OUTLOOK') AND "+
+        "category IN ('НОВОСТЬ','FYI') AND action='Действий не требуется' "+
+        "ORDER BY received_at DESC LIMIT 30"
+      ).all(),
+      env.DB.prepare(
+        "SELECT email_id,subject,summary,received_at FROM emails "+
+        "WHERE status='WORK_REVIEW' ORDER BY received_at DESC LIMIT 30"
+      ).all()
+    ]);
+    return json({telegram,telegram_review,mail:mail.results||[],
+      mail_review:mail_review.results||[]});
+  }
+  const parts=section.split('/');
+  if(request.method==='POST'&&parts.length===3&&
+    parts[0]==='telegram'&&['task','news','ignore'].includes(parts[2])){
+    let id;try{id=decodeURIComponent(parts[1]);}catch{return json({error:'invalid_id'},400);}
+    if(!/^-?\d{1,20}:\d{1,16}$/.test(id))return json({error:'invalid_id'},400);
+    const result=await reviewTelegramMention(env,'mention:'+parts[2]+':'+id);
+    return json({text:result.text});
+  }
+  if(request.method==='POST'&&parts.length===3&&parts[0]==='mail'&&
+    ['task','news','ignore'].includes(parts[2])){
+    let id;try{id=decodeURIComponent(parts[1]);}catch{return json({error:'invalid_id'},400);}
+    if(!/^[A-Za-z0-9_-]{4,160}$/.test(id))return json({error:'invalid_id'},400);
+    const result=parts[2]==='task'?
+      await createTaskFromWorkEmail(env,id):
+      await categorizeReviewedWorkEmail(env,id,parts[2]);
+    return json({text:result.text});
   }
   if(request.method==='GET'&&section==='brief')return json(await dailyBriefPreview(env));
   if(request.method==='GET'&&section==='memory')
