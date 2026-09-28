@@ -59,6 +59,7 @@ function preview(d){
   ),reply_markup:buttons};
 }
 export async function draftPersonalMail(env,chatId,input){
+  if(env.ASSISTANT_SCOPE==='work')return {text:'Личный Gmail отключён в рабочем режиме. Для отправки используется только согласованный корпоративный Outlook.',reply_markup:backMarkup()};
   const from=await sender(env);
   if(!from)return {text:'Личный Gmail ещё не подключён с разрешением составлять письма. Ничего не отправлено.',
     reply_markup:backMarkup()};
@@ -77,6 +78,8 @@ export async function draftPersonalMail(env,chatId,input){
 // Replies are drafted against the owner's actual Gmail message, never
 // against unverified forwarded text or an Outlook message not in Gmail.
 export async function draftPersonalReply(env,chatId,messageId,instruction){
+  if(env.ASSISTANT_SCOPE==='work')
+    return {text:'Ответы с личного Gmail отключены в рабочем режиме.',reply_markup:backMarkup()};
   const id=cut(messageId,150);
   if(!/^[a-zA-Z0-9_-]{5,150}$/.test(id))
     return {text:'Некорректный идентификатор письма.',reply_markup:backMarkup()};
@@ -100,6 +103,8 @@ export async function draftPersonalReply(env,chatId,messageId,instruction){
   });
 }
 export async function mailCallback(env,chatId,action){
+  if(env.ASSISTANT_SCOPE==='work')
+    return {text:'Личная почта сейчас выключена. Ничего не отправлено.',reply_markup:backMarkup()};
   const row=await current(env,chatId);
   if(action==='mail:cancel'){
     if(['PERSONAL_MAIL_DRAFT','PERSONAL_MAIL_EDIT'].includes(row?.mode)){
@@ -121,6 +126,7 @@ export async function mailCallback(env,chatId,action){
   return null;
 }
 export async function mailFollowup(env,chatId,text){
+  if(env.ASSISTANT_SCOPE==='work')return null;
   const row=await current(env,chatId);
   if(!['PERSONAL_MAIL_DRAFT','PERSONAL_MAIL_EDIT'].includes(row?.mode))return null;
   if(/^(отмена|нет|не отправляй|отмени)$/i.test(cut(text,60)))
@@ -140,6 +146,8 @@ export async function mailFollowup(env,chatId,text){
     reply_markup:buttons};
 }
 export async function confirmPersonalMail(env,chatId){
+  if(env.ASSISTANT_SCOPE==='work')
+    return {text:'Личная почта отключена в рабочем режиме. Ничего не отправлено.',reply_markup:backMarkup()};
   if(env.PERSONAL_GMAIL_SEND_ENABLED!=='true')
     return {text:'Отправка личной почты пока отключена. Черновик не отправлен.',
       reply_markup:backMarkup()};
