@@ -82,10 +82,29 @@ export async function connectionStatus(request,env) {
     ? checks[0].value : {ok:false,reason:'google_connection_unavailable'};
   const groq=checks[1].status==='fulfilled'
     ? checks[1].value : {ok:false,reason:'groq_connection_unavailable'};
+  let additional={calendar_connected:false,outlook_connected:false};
+  try {
+    const entries=await env.DB.prepare(
+      "SELECT provider FROM oauth_credentials WHERE provider IN ('calendar','outlook')"
+    ).all();
+    const found=new Set((entries.results||[]).map(e=>e.provider));
+    additional={
+      calendar_connected:found.has('calendar'),
+      outlook_connected:found.has('outlook')
+    };
+  }catch{/* No credentials are exposed in health diagnostics. */}
   return response({
     ok:Boolean(google.ok&&groq.ok),
     service:'Персональный помощник',phase:'staging',
     google,groq,mailbox,
+    ...additional,
+    personal_mail_ingest_enabled:env.GMAIL_PERSONAL_INGEST_ENABLED==='true',
+    personal_mail_send_enabled:env.PERSONAL_GMAIL_SEND_ENABLED==='true',
+    calendar_enabled:env.GOOGLE_CALENDAR_ENABLED==='true'&&additional.calendar_connected,
+    outlook_mail_enabled:env.OUTLOOK_POLL_ENABLED==='true'&&additional.outlook_connected,
+    telegram_connected:Boolean(env.TELEGRAM_BOT_TOKEN&&env.TELEGRAM_CHAT_ID),
+    daily_brief_enabled:env.DAILY_BRIEF_ENABLED==='true',
+    reminders_enabled:env.REMINDERS_ENABLED==='true',
     mail_poll_enabled:env.GMAIL_POLL_ENABLED==='true',
     mail_notifications_enabled:env.WORKER_EMAIL_NOTIFICATIONS==='true',
     email_send_enabled:env.GMAIL_SEND_ENABLED==='true'
