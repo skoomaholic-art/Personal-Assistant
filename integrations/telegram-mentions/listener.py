@@ -73,8 +73,18 @@ def source_link(event, chat):
 async def run(args):
     api_id, api_hash, session = config()
     os.umask(0o077)
-    ids = {x.strip() for x in os.environ.get("TG_MENTION_CHAT_IDS", "").split(",") if x.strip()}
-    private_ids = {x.strip() for x in os.environ.get("TG_MENTION_PRIVATE_CHAT_IDS", "").split(",") if x.strip()}
+    # A local ID-only file beside the existing session can override environment lists.
+    # Keep it outside Git; Cloudflare still checks its own independent allowlists.
+    list_path = Path(session).parent / "telegram-chat-allowlists.txt"
+    values = {}
+    if list_path.is_file():
+        for line in list_path.read_text(encoding="utf-8-sig").splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, value = line.split("=", 1)
+                if key.strip() in ("TG_MENTION_CHAT_IDS", "TG_MENTION_PRIVATE_CHAT_IDS"):
+                    values[key.strip()] = value.strip()
+    ids = {x.strip() for x in values.get("TG_MENTION_CHAT_IDS", os.environ.get("TG_MENTION_CHAT_IDS", "")).split(",") if x.strip()}
+    private_ids = {x.strip() for x in values.get("TG_MENTION_PRIVATE_CHAT_IDS", os.environ.get("TG_MENTION_PRIVATE_CHAT_IDS", "")).split(",") if x.strip()}
     if not args.list_chats and not ids and not private_ids:
         raise SystemExit("Set TG_MENTION_CHAT_IDS and/or TG_MENTION_PRIVATE_CHAT_IDS")
     if "*" in private_ids or any(not x.isdigit() or int(x) < 1 for x in private_ids):
