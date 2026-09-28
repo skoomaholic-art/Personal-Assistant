@@ -15,6 +15,7 @@ import {memoryCallback,showMemory} from './memory.js';
 import {dailyBriefPreview,runDailyBrief} from './brief.js';
 import {startOutlookOAuth,completeOutlookOAuth,pollOutlook} from './outlook.js';
 import {miniApp} from './miniapp.js';
+import {latestNews} from './news.js';
 import {connectionStatus} from './admin.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
@@ -283,7 +284,18 @@ async function prepareAnswer(update, env) {
       '. Записи появятся в задачах после обработки очереди.',reply_markup:backMarkup()};
   }
   if (action==='important') return fromRows('🔥 Важное',await listEmails(env,"priority='высокий' OR category='ВАЖНО'"),'email');
-  if (action==='news') return fromRows('📰 Новости / FYI',await listEmails(env,"category IN ('НОВОСТЬ','FYI')"),'email');
+  if (action==='news'){
+    const userText=String(update?.message?.text||'');
+    const query=userText.replace(/^.*?(?:новост[ьи]|что нового)/i,'')
+      .replace(/^(?:про|о|об|в|по|за|на)\s+/i,'').trim().slice(0,90)||'Казахстан';
+    const [external,fromMail]=await Promise.all([
+      latestNews(query),
+      listEmails(env,"category IN ('НОВОСТЬ','FYI')")
+    ]);
+    const inbox=fromMail.slice(0,3).map(x=>'• '+val(x.subject,100)).join('\n');
+    return {text:safeText((inbox?'📬 Из твоей почты:\n'+inbox+'\n\n':'')+
+      external.text),reply_markup:backMarkup()};
+  }
   if (action==='colleagues') {
     const domain=String(env.WORK_DOMAIN || 'fmedia.kz').toLowerCase();
     return fromRows('👥 Коллеги',await listEmails(env,'lower(from_email) LIKE ?',['%@'+domain]),'email');
