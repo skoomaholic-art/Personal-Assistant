@@ -50,7 +50,7 @@ nav{position:fixed;left:0;right:0;bottom:0;background:#13241a;border-top:1px sol
 nav button{border:0;background:transparent;font-size:12px;padding:7px 2px}nav button[aria-current=true]{color:var(--accent)}
 .hidden{display:none}.body{white-space:pre-wrap;overflow-wrap:anywhere}.actions{display:flex;flex-wrap:wrap}
 </style></head><body><main><h1>Персональный помощник</h1>
-<p>Один центр для дел, переписки и встреч.</p><div id="notice"></div>
+<p>Рабочие задачи, Outlook, встречи и информация в одном месте.</p><div id="notice"></div>
 <section id="home"></section><section id="tasks" class="hidden"></section>
 <section id="mail" class="hidden"></section><section id="calendar" class="hidden"></section>
 <section id="memory" class="hidden"></section></main>
