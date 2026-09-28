@@ -50,6 +50,19 @@ export async function telegramCutoverReadiness(request,env){
         mail_needing_review:Number(row?.mail_review||0)};
     }catch{}
   }
+  let legacyImport={completed:false};
+  if(env.DB){
+    try{
+      const row=await env.DB.prepare(
+        "SELECT mode,data FROM states WHERE chat_id='system:legacy-task-import'"
+      ).first();
+      if(row?.mode==='IMPORTED'){
+        let data={};try{data=JSON.parse(row.data||'{}');}catch{}
+        legacyImport={completed:Boolean(data.confirmed_work_only),
+          source_rows:Number(data.source_rows||0)};
+      }
+    }catch{}
+  }
   return json({
     service:'rahal-mamut',scope:env.ASSISTANT_SCOPE||'unspecified',
     worker_ready_for_webhook:ready,webhook,
@@ -61,7 +74,7 @@ export async function telegramCutoverReadiness(request,env){
       // A configured secret is not proof of a live Windows MTProto connection.
       process_running:'unverified'
     },
-    legacy_tasks_imported:'unverified',
+    legacy_tasks_imported:legacyImport,
     notifications_from_worker:env.WORKER_EMAIL_NOTIFICATIONS==='true'
   });
 }

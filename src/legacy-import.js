@@ -142,10 +142,21 @@ export async function importLegacyTasks(request,env){
     return invalid('Импорт прервался. Ранее сохранённые записи остаются в D1. '+
       'Повторная загрузка того же файла безопасна: существующие задачи не перезаписываются.',503);
   }
+  // Record an owner-confirmed migration checkpoint without exposing source data.
+  try{
+    await env.DB.prepare(
+      'INSERT INTO states(chat_id,mode,data,updated_at) VALUES(?,?,?,?) '+
+      'ON CONFLICT(chat_id) DO UPDATE SET mode=excluded.mode,data=excluded.data,updated_at=excluded.updated_at'
+    ).bind('system:legacy-task-import','IMPORTED',JSON.stringify({
+      source_rows:tasks.length,imported_rows:imported,confirmed_work_only:true
+    }),Math.floor(Date.now()/1000)).run();
+  }catch{return invalid('Задачи перенесены, но отметку о завершении записать не удалось. '+
+    'Повтори загрузку: уже импортированные задачи не будут перезаписаны.',503);}
   return page('<h2>Импорт завершён</h2><p>Строк задач в CSV: <b>'+
     tasks.length+'</b>. Новых задач в D1: <b>'+imported+
     '</b>. Уже существующие и повторяющиеся записи пропущены: <b>'+
     (tasks.length-imported)+'</b>.</p>'+
     '<p>Старые Google Sheets не изменены. Не удаляй экспорт до проверки новой версии.</p>'+
+    '<p><a href="/admin/telegram/status">Проверить готовность Telegram</a></p>'+ 
     '<p><a href="/admin/import/tasks">Загрузить другой CSV</a></p>');
 }
