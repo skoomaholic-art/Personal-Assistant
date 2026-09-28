@@ -53,13 +53,13 @@ nav button{border:0;background:transparent;font-size:12px;padding:7px 2px}nav bu
 .hidden{display:none}.body{white-space:pre-wrap;overflow-wrap:anywhere}.actions{display:flex;flex-wrap:wrap}
 </style></head><body><main><h1>Персональный помощник</h1>
 <p>Рабочие задачи, Outlook, встречи и информация в одном месте.</p><div id="notice"></div>
-<section id="home"></section><section id="tasks" class="hidden"></section>
-<section id="mail" class="hidden"></section><section id="news" class="hidden"></section>
+<section id="home"></section><section id="tasks" class="hidden"></section><section id="progress" class="hidden"></section><section id="done" class="hidden"></section>
+<section id="mail" class="hidden"></section><section id="news" class="hidden"></section><section id="review" class="hidden"></section>
 <section id="calendar" class="hidden"></section>
 <section id="memory" class="hidden"></section></main>
 <nav><button data-tab="home" aria-current="true">Главная</button>
-<button data-tab="tasks">Задачи</button><button data-tab="mail">Почта</button>
-<button data-tab="news">Новости</button><button data-tab="calendar">Календарь</button>
+<button data-tab="tasks">Новые</button><button data-tab="progress">В работе</button><button data-tab="done">Готово</button><button data-tab="mail">Почта</button>
+<button data-tab="news">Новости</button><button data-tab="review">Разбор</button><button data-tab="calendar">Календарь</button>
 <button data-tab="memory">Память</button></nav>
 <script>
 (function(){
@@ -88,8 +88,9 @@ async function show(tab){
     c.append(el('small',item.from_name+' · '+item.category));box.append(c);}
    if(!d.length)box.append(card('Почта','Нет новых писем.'));
   }
-  if(tab==='news'){
-   const data=await api('news');box.replaceChildren(el('h2','Рабочие новости'));
+  if(tab==='news'||tab==='review'){
+   const data=await api('news');box.replaceChildren(el('h2',tab==='review'?'На разбор':'Рабочие новости'));
+   if(tab==='news'){
    for(const item of data.telegram){
     const c=card(item.summary,'Из Telegram · '+(item.chat_title||'Чат'));
     c.append(el('small','От: '+(item.sender_name||'Участник')));
@@ -105,7 +106,9 @@ async function show(tab){
    }
    if(!data.telegram.length&&!data.mail.length)
     box.append(card('Новостей нет','Здесь появятся рабочие сообщения и рассылки.'));
-   box.append(el('h2','⚠️ На разбор'));
+   }
+   if(tab==='review'){
+    box.append(el('h2','⚠️ На разбор'));
    const decide=async(url,question)=>{
     if(!window.confirm(question))return;
     try{const response=await api(url,'POST');notice.textContent=response.text;
@@ -138,6 +141,7 @@ async function show(tab){
    }
    if(!data.telegram_review.length&&!data.mail_review.length)
     box.append(card('Всё разобрано','Неопределённых рабочих сообщений нет.'));
+   }
   }
   if(tab==='calendar'){const d=await api('calendar');
    box.replaceChildren(...(d.work_only?[card('Рабочий Outlook',d.work)]:
@@ -145,33 +149,70 @@ async function show(tab){
   if(tab==='memory'){const d=await api('memory');
    box.replaceChildren(card('Подтверждённая память',
     d.map((v,i)=>(i+1)+'. '+v).join('\n')||'Скажи боту «Запомни ...».'));}
-  if(tab==='tasks'){
-   const d=await api('tasks');box.replaceChildren(el('h2','Задачи'));
-   const form=el('form'),title=el('input'),description=el('textarea'),due=el('input');
-   title.placeholder='Новая задача';title.required=true;title.maxLength=180;
-   description.placeholder='Описание';description.maxLength=900;due.type='datetime-local';
-   const save=el('button','➕ Добавить','save');save.type='submit';
-   form.append(title,description,due,save);
-   form.addEventListener('submit',async e=>{e.preventDefault();
-    try{await api('tasks','POST',{title:title.value,description:description.value,
-      due_iso:due.value?new Date(due.value).toISOString():'',
-      due_text:due.value||''});await show('tasks');}
-    catch(err){notice.textContent=err.message;}});
-   box.append(form);
-   for(const task of d){const c=card(task.title,task.description);
+  if(['tasks','progress','done'].includes(tab)){
+   const wanted={tasks:'NEW',progress:'IN_PROGRESS',done:'DONE'}[tab];
+   const d=(await api('tasks')).filter(task=>task.status===wanted);
+   box.replaceChildren(el('h2',{tasks:'Задачи (не в работе)',progress:'Задачи (в работе)',done:'Выполненные'}[tab]));
+   if(tab==='tasks'){
+    const form=el('form'),title=el('input'),description=el('textarea'),due=el('input');
+    title.placeholder='Новая задача';title.required=true;title.maxLength=180;
+    description.placeholder='Описание';description.maxLength=900;due.type='datetime-local';
+    const save=el('button','➕ Добавить','save');save.type='submit';
+    form.append(title,description,due,save);
+    form.addEventListener('submit',async e=>{e.preventDefault();
+     try{await api('tasks','POST',{title:title.value,description:description.value,
+       due_iso:due.value?new Date(due.value).toISOString():'',
+       due_text:due.value||''});await show('tasks');}
+     catch(err){notice.textContent=err.message;}});
+    box.append(form);
+   }
+   for(const task of d){
+    const c=card(task.title,task.description);
     const origin=task.email_id?'📨 Из рабочей почты':
       task.task_id.startsWith('tgm:')?'💬 Из Telegram':'➕ Добавлена вручную';
-    c.append(el('small',origin+' · '+(task.due_text||'Без срока')+' · '+task.status));
-    const buttons=el('div',undefined,'actions');
-    for(const pair of [['progress','🟡 В работу'],['done','✅ Выполнено'],['delete','🗑 Удалить']]){
-     if(task.status==='DONE'&&pair[0]!=='delete')continue;
-     const b=el('button',pair[1]);b.addEventListener('click',async()=>{
-      if(!window.confirm('Подтвердить изменение задачи «'+task.title+'»?'))return;
-      try{await api('tasks/'+encodeURIComponent(task.task_id)+'/'+pair[0],'POST');
-       await show('tasks');}catch(err){notice.textContent=err.message;}
-     });buttons.append(b);
-    }c.append(buttons);box.append(c);}
-   if(!d.length)box.append(card('Активные задачи','Пока нет.'));
+    c.append(el('small',origin+' · '+(task.due_text||'Без срока')+' · Важность: '+task.priority));
+    const actions=el('div',undefined,'actions');
+    const action=async(name,body)=>{
+     try{
+      const result=await api('tasks/'+encodeURIComponent(task.task_id)+'/'+name,'POST',body);
+      if(!result.changed){notice.textContent='Задача уже была изменена. Обнови список.';return;}
+      await show(tab);
+     }catch(error){notice.textContent=error.message;}
+    };
+    if(task.status==='NEW'){
+     const importance=el('select');
+     for(const label of ['Выбери важность','высокий','средний','низкий']){
+      const option=el('option',label);option.value=label==='Выбери важность'?'':label;
+      if(!option.value){option.disabled=true;option.selected=true;}
+      importance.append(option);
+     }
+     const start=el('button','🟡 Взять в работу','save');
+     start.addEventListener('click',()=>importance.value?
+       action('progress',{priority:importance.value}):
+       (notice.textContent='Выбери важность задачи.'));
+     actions.append(importance,start);
+    }
+    if(task.status==='IN_PROGRESS'){
+     const importance=el('select');
+     for(const label of ['высокий','средний','низкий']){
+      const option=el('option',label);option.value=label;
+      option.selected=label===task.priority;importance.append(option);
+     }
+     const save=el('button','Сохранить важность');
+     save.addEventListener('click',()=>action('priority',{priority:importance.value}));
+     const finish=el('button','✅ Выполнено','save');
+     finish.addEventListener('click',()=>{
+      if(window.confirm('Завершить задачу «'+task.title+'»?'))action('done');
+     });
+     actions.append(importance,save,finish);
+    }
+    const remove=el('button','🗑 Удалить');
+    remove.addEventListener('click',()=>{
+     if(window.confirm('Удалить задачу «'+task.title+'»?'))action('delete');
+    });
+    actions.append(remove);c.append(actions);box.append(c);
+   }
+   if(!d.length)box.append(card('Пока пусто','Задач в этом разделе нет.'));
   }
   notice.textContent='';
  }catch(err){notice.textContent=err.message||'Ошибка загрузки';}
@@ -266,13 +307,26 @@ export async function miniApp(request,env){
     ).bind(id,title,description,'NEW','средний',dueIso,dueText,now,now).run();
     return json({created:true,task_id:id},201);
   }
-  const match=section.match(/^tasks\/([a-zA-Z0-9_:-]{3,80})\/(done|progress|delete)$/);
+  const match=section.match(/^tasks\/([a-zA-Z0-9_:-]{3,80})\/(done|progress|priority|delete)$/);
   if(request.method==='POST'&&match){
-    const status={done:'DONE',progress:'IN_PROGRESS',delete:'DELETED'}[match[2]];
-    const sql=status==='DELETED'?
-      "UPDATE tasks SET status=?,updated_at=? WHERE task_id=? AND status!='DELETED'":
-      "UPDATE tasks SET status=?,updated_at=? WHERE task_id=? AND status NOT IN ('DONE','DELETED')";
-    const result=await env.DB.prepare(sql).bind(status,new Date().toISOString(),match[1]).run();
+    const [,id,action]=match,instant=new Date().toISOString();
+    if(action==='progress'||action==='priority'){
+      const raw=await request.text();
+      if(raw.length>200)return json({error:'too_large'},413);
+      let data;try{data=JSON.parse(raw);}catch{return json({error:'invalid_body'},400);}
+      if(!['высокий','средний','низкий'].includes(data?.priority))
+        return json({error:'priority_required'},400);
+      const result=await env.DB.prepare(
+        action==='progress'?
+          "UPDATE tasks SET status='IN_PROGRESS',priority=?,updated_at=? WHERE task_id=? AND status='NEW'":
+          "UPDATE tasks SET priority=?,updated_at=? WHERE task_id=? AND status='IN_PROGRESS'"
+      ).bind(data.priority,instant,id).run();
+      return json({changed:result.meta.changes===1});
+    }
+    const sql=action==='delete'?
+      "UPDATE tasks SET status='DELETED',updated_at=? WHERE task_id=? AND status!='DELETED'":
+      "UPDATE tasks SET status='DONE',updated_at=? WHERE task_id=? AND status='IN_PROGRESS'";
+    const result=await env.DB.prepare(sql).bind(instant,id).run();
     return json({changed:result.meta.changes===1});
   }
   return json({error:'not_found'},404);
