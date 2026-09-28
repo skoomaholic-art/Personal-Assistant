@@ -49,7 +49,15 @@ def relay_post(payload):
             return
         except urllib.error.HTTPError as error:
             if error.code in (400, 401, 403, 413):
-                LOG.error("Ingest refused message (HTTP %s); check configuration", error.code)
+                reason = "unknown"
+                if error.code == 403:
+                    try:
+                        code = json.loads(error.read(256).decode("utf-8")).get("error", "")
+                        if code in ("private_chat_not_allowed", "chat_not_allowed"):
+                            reason = code
+                    except (ValueError, UnicodeError, AttributeError):
+                        pass
+                LOG.error("Ingest refused message (HTTP %s, reason=%s)", error.code, reason)
                 return
             LOG.warning("Ingest HTTP %s", error.code)
         except (urllib.error.URLError, TimeoutError) as error:
