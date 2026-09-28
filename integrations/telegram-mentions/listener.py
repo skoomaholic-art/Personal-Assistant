@@ -1,7 +1,7 @@
 """Personal Telegram mention listener. Runs separately from Cloudflare Workers.
 
-Uses the owner's MTProto session only to READ authorized chats; transmits matching
-mentions/replies to the existing assistant's protected ingestion endpoint.
+Uses the owner's MTProto session only to READ explicitly authorized chats and
+contacts; transmits new work messages to the existing assistant endpoint.
 Never commit a .session file or print its contents.
 """
 import argparse
@@ -120,7 +120,7 @@ async def run(args):
             return
         if not owner or not owner.id:
             raise SystemExit("Telegram account was not authorized")
-        LOG.info("Watching authorized chat mentions and replies (no historic chat export)")
+        LOG.info("Watching authorized Telegram sources (new messages only, no history export)")
         sem = asyncio.Semaphore(6)
 
         @client.on(events.NewMessage(incoming=True))
@@ -144,19 +144,28 @@ async def run(args):
                 if not WORK_TOPIC.search(text):
                     return  # Never export ambiguous private chat content.
             direct = private or bool(USER_REF.search(text) or getattr(msg, "mentioned", False))
-            signal = "private" if private else "mention"
+            if not private and not direct and not WORK_TOPIC.search(text):
+                return  # Ignore unrelated group chatter locally.
+            signal = "private" if private else "mention" if direct else "group"
             if not private and not direct and msg.reply_to_msg_id:
                 # Check actual parent author; do not treat every threaded reply as ours.
                 original = await msg.get_reply_message()
                 direct = bool(original and original.sender_id == owner.id)
-                signal = "reply"
-            if not direct:
-                return
+                if direct:
+                    signal = "reply"
             chat = await event.get_chat()
             date = msg.date.astimezone(timezone.utc).isoformat() if msg.date else ""
             sender_name = " ".join(x for x in (
                 getattr(sender, "first_name", ""), getattr(sender, "last_name", "")
             ) if x) or getattr(sender, "title", "") or "Участник"
+            reply_to = int(msg.reply_to_msg_id or 0)
+            reply_meta = getattr(msg, "reply_to", None)
+            thread_id = int(
+                getattr(msg, "reply_to_top_id", 0)
+                or getattr(reply_meta, "reply_to_top_id", 0)
+                or reply_to
+                or msg.id
+            )
             payload = {
                 "chat_id": str(event.chat_id), "message_id": msg.id,
                 "sender_id": str(msg.sender_id or ""),
@@ -165,6 +174,7 @@ async def run(args):
                 "date": date, "link": source_link(event, chat),
                 "source_type": "private" if private else "group",
                 "media_kind": "document" if msg.document else "photo" if msg.photo else "",
+                "reply_to_message_id": reply_to, "thread_id": thread_id,
             }
             async with sem:
                 await asyncio.to_thread(relay_post, payload)

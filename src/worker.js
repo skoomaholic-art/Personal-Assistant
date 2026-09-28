@@ -1,5 +1,5 @@
 import {
-  commandOf, getChatId, QUICK_ACTIONS, hasValidSecret, safeText,
+  commandOf, getChatId, isQuickAction, hasValidSecret, safeText,
   menuMarkup, moreMarkup, backMarkup, emailMarkup, taskMarkup, normalizePriority,
   isEmailObject, localDayBounds
 } from './router.js';
@@ -25,6 +25,7 @@ import {importLegacyTasks} from './legacy-import.js';
 import {telegramCutoverReadiness} from './telegram-status.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
+import {storeSourceEvent,taskHistory} from './task-store.js';
 
 const JSON_HEADERS = {'content-type':'application/json; charset=utf-8', 'cache-control':'no-store'};
 const ok = (data, status = 200) => Response.json(data, {status, headers:JSON_HEADERS});
@@ -103,7 +104,7 @@ export async function webhook(request, env) {
       return ok({error:'temporary'},503);
     }
   }
-  const quick = QUICK_ACTIONS.has(commandOf(update));
+  const quick = isQuickAction(commandOf(update));
   const insert = await env.DB.prepare(
     "INSERT OR IGNORE INTO telegram_updates(update_id,status,created_at) VALUES(?,'queued',?)"
   ).bind(update.update_id,nowSeconds()).run();
@@ -217,7 +218,8 @@ function fromRows(title, rows, kind) {
     const value = kind === 'task' ? r.title : r.subject;
     lines.push('\n'+(index+1)+'. '+safeText(value,130));
     if (kind === 'task') {
-      lines.push('Важность: '+r.priority+' | Дедлайн: '+(r.due_text || 'Не указан'));
+      lines.push('Приоритет: '+r.priority+' | Дедлайн: '+(r.due_text || 'Не указан'));
+      if(r.source_author)lines.push('Автор: '+safeText(r.source_author,80));
       buttons.push([{text:(index+1)+'. '+safeText(value,35),callback_data:'task:view:'+r.task_id}]);
     } else {
       lines.push(safeText(r.summary,170));
@@ -274,9 +276,10 @@ async function prepareAnswer(update, env) {
     const title={tasks:'📥 Задачи - ещё не взяты в работу',
       progress:'🟡 В работе',done:'✅ Выполненные'}[action];
     const rows=await env.DB.prepare(
-      "SELECT task_id,title,status,priority,due_text FROM tasks WHERE status=? "+
+      "SELECT t.task_id,t.title,t.status,t.priority,t.due_text,m.source_author "+
+      "FROM tasks t LEFT JOIN task_metadata m ON m.task_id=t.task_id WHERE t.status=? "+
       "ORDER BY CASE priority WHEN 'высокий' THEN 0 WHEN 'средний' THEN 1 ELSE 2 END, "+
-      "updated_at DESC LIMIT 8"
+      "t.updated_at DESC LIMIT 8"
     ).bind(status).all();
     return fromRows(title,rows.results||[],'task');
   }
@@ -351,7 +354,8 @@ async function prepareAnswer(update, env) {
     const query=userText.replace(/^.*?(?:новост[ьи]|что нового)/i,'')
       .replace(/^(?:про|о|об|в|по|за|на)\s+/i,'').trim().slice(0,90);
     const [fromMail,fromTelegram,external]=await Promise.all([
-      listEmails(env,"category IN ('НОВОСТЬ','FYI') AND action='Действий не требуется'"),
+      listEmails(env,"action='Действий не требуется' AND (category IN ('НОВОСТЬ','FYI','ВАЖНО') OR "+
+        "EXISTS(SELECT 1 FROM inbound_events i WHERE i.source_id=emails.email_id AND i.classification IN ('NEWS','INFO')))"),
       latestTelegramMentions(env,5),
       topical?latestNews(query||'OTT Казахстан'):
         (!workOnly(env)?latestNews('Казахстан'):Promise.resolve(null))
@@ -436,48 +440,9 @@ async function prepareAnswer(update, env) {
     relayCallback(env,chatId,callback):
     {text:'Рабочая отправка в Telegram пока не включена.',reply_markup:backMarkup()};
   if(callback?.startsWith('memory:'))return memoryCallback(env,chatId,callback);
-  if(callback && (callback==='task:new:save'||callback==='task:new:change'||
-     callback==='task:new:cancel'||callback==='task:action:yes'||
-     callback==='task:action:no'||callback.startsWith('task:delete:ask:')||
-     callback.startsWith('task:postpone:')))
-    return taskCallback(env,chatId,callback,update.update_id);
-  if (callback?.startsWith('task:view:')) {
-    const t=await env.DB.prepare("SELECT task_id,title,description,status,priority,due_text FROM tasks WHERE task_id=? AND status!='DELETED'").bind(callback.slice(10)).first();
-    return t?{text:safeText('✅ Задача\n\n'+t.title+'\n\n'+t.description+'\nСтатус: '+t.status+'\nПриоритет: '+t.priority+'\nДедлайн: '+t.due_text),reply_markup:taskMarkup(t.task_id,t.status)}:{text:'Задача не найдена.',reply_markup:backMarkup()};
-  }
-  if(callback?.startsWith('task:progress:')){
-    const id=callback.slice('task:progress:'.length);
-    const task=await env.DB.prepare(
-      "SELECT title,priority FROM tasks WHERE task_id=? AND status='NEW'"
-    ).bind(id).first();
-    if(!task)return {text:'Задача уже взята в работу или закрыта.',reply_markup:backMarkup()};
-    return {text:safeText('Какую важность установить для «'+task.title+'»? '+
-      'Предварительная важность из письма: '+task.priority),
-      reply_markup:{inline_keyboard:[
-        [{text:'🔴 Высокая',callback_data:'task:priority:high:'+id}],
-        [{text:'🟡 Средняя',callback_data:'task:priority:medium:'+id}],
-        [{text:'🟢 Низкая',callback_data:'task:priority:low:'+id}],
-        [{text:'☰ Меню',callback_data:'menu'}]
-      ]}};
-  }
-  if(callback?.startsWith('task:priority:')){
-    const match=/^task:priority:(high|medium|low):(.+)$/.exec(callback);
-    if(!match)return {text:'Некорректный выбор важности.',reply_markup:backMarkup()};
-    const priority={high:'высокий',medium:'средний',low:'низкий'}[match[1]];
-    const result=await env.DB.prepare(
-      "UPDATE tasks SET status='IN_PROGRESS',priority=?,updated_at=? WHERE task_id=? AND status='NEW'"
-    ).bind(priority,new Date().toISOString(),match[2]).run();
-    return {text:result.meta.changes===1?
-      '🟡 Взято в работу. Важность: '+priority+'.':'Задача уже взята в работу или закрыта.',
-      reply_markup:backMarkup()};
-  }
-  if(callback?.startsWith('task:done:')){
-    const id=callback.slice('task:done:'.length);
-    const result=await env.DB.prepare(
-      "UPDATE tasks SET status='DONE',updated_at=? WHERE task_id=? AND status NOT IN ('DONE','DELETED')"
-    ).bind(new Date().toISOString(),id).run();
-    return {text:result.meta.changes===1?'✅ Задача выполнена.':'Задача уже закрыта или удалена.',
-      reply_markup:backMarkup()};
+  if(callback?.startsWith('task:')){
+    const result=await taskCallback(env,chatId,callback,update.update_id);
+    if(result)return result;
   }
   if (callback?.startsWith('email:reply:')) {
     if(workOnly(env)){
@@ -647,14 +612,30 @@ async function ingestEmail(request,env) {
   if (!isEmailObject(raw)) return ok({error:'invalid_email_record'},400);
   const email={id:raw.email_id,received_at:val(raw.received_at||new Date().toISOString(),40),from_name:val(raw.from_name,250),from_email:val(raw.from_email,250),subject:val(raw.subject,500),summary:val(raw.summary,1600),action:val(raw.action,900),category:val(raw.category||'ПИСЬМО',30),priority:normalizePriority(raw.priority),deadline_text:val(raw.deadline_text,100),deadline_iso:val(raw.deadline_iso,40),has_attachments:raw.has_attachments==='YES'||raw.has_attachments===true?1:0};
   const result=await env.DB.prepare('INSERT OR IGNORE INTO emails(email_id,received_at,from_name,from_email,subject,summary,action,category,priority,deadline_text,deadline_iso,has_attachments,notification_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)')
-    .bind(email.id,email.received_at,email.from_name,email.from_email,email.subject,email.summary,email.action,email.category,email.priority,email.deadline_text,email.deadline_iso,email.has_attachments,env.WORKER_EMAIL_NOTIFICATIONS==='true'?'queued':'disabled').run();
+    .bind(email.id,email.received_at,email.from_name,email.from_email,email.subject,email.summary,email.action,email.category,email.priority,email.deadline_text,email.deadline_iso,email.has_attachments,'disabled').run();
   if (result.meta.changes===0) return ok({ok:true,duplicate:true});
-  // No automatic user-facing alert by default: Apps Script still owns mail notifications.
-  if (env.WORKER_EMAIL_NOTIFICATIONS==='true') {
+  const needsAction=email.action&&email.action!=='Действий не требуется';
+  const classification=needsAction?'TASK':
+    ['НОВОСТЬ','FYI','ВАЖНО'].includes(email.category)?'NEWS':'INFO';
+  const source=await storeSourceEvent(env,{
+    sourceType:'email_ingest',sourceId:email.id,threadKey:'email_ingest:'+email.id,
+    author:email.from_name,sourceTitle:'Рабочее письмо: '+email.subject,
+    originalText:email.summary,classification,
+    title:needsAction?email.action:email.subject,
+    description:email.summary,summary:email.summary,priority:email.priority,
+    dueIso:email.deadline_iso,dueText:email.deadline_text,emailId:email.id,
+    createdAt:email.received_at
+  });
+  const notify=env.WORKER_EMAIL_NOTIFICATIONS==='true'&&
+    (source.created||email.category==='ВАЖНО');
+  if (notify) {
+    await env.DB.prepare(
+      "UPDATE emails SET notification_status='queued' WHERE email_id=? AND notification_status='disabled'"
+    ).bind(email.id).run();
     try { await env.JOBS.send({kind:'email',email_id:email.id}); }
     catch (e) { failLog('ingest_queue_failed',e); return ok({ok:true,stored:true,notification:'needs_review'},202); }
   }
-  return ok({ok:true,stored:true});
+  return ok({ok:true,stored:true,task:source.created,updated:source.updated});
 }
 async function ingestTask(request,env) {
   if (!env.INGEST_SECRET || !hasValidSecret(request.headers.get('authorization')?.replace(/^Bearer /i,'')||'',env.INGEST_SECRET)) return ok({error:'unauthorized'},401);
@@ -665,6 +646,13 @@ async function ingestTask(request,env) {
   const now=new Date().toISOString();
   const result=await env.DB.prepare('INSERT OR IGNORE INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
     .bind(val(t.task_id,128),t.email_id?val(t.email_id,128):null,val(t.title,180),val(t.description,900),['NEW','IN_PROGRESS','DONE'].includes(t.status)?t.status:'NEW',normalizePriority(t.priority),val(t.due_iso,40),val(t.due_text,100),val(t.created_at||now,40),now).run();
+  if(result.meta.changes===1){
+    await env.DB.prepare(
+      'INSERT OR IGNORE INTO task_metadata(task_id,source_type,source_id,source_title,original_text,suggested_priority,last_source_at) '+
+      "VALUES(?,'api',?,'Внешняя интеграция',?,?,?)"
+    ).bind(val(t.task_id,128),val(t.task_id,128),val(t.description,4000),normalizePriority(t.priority),now).run();
+    await taskHistory(env,val(t.task_id,128),'CREATED','Внешняя интеграция');
+  }
   return ok({ok:true,stored:result.meta.changes===1,duplicate:result.meta.changes===0});
 }
 async function processEmail(job,env) {
@@ -675,11 +663,17 @@ async function processEmail(job,env) {
   // Unknown network delivery is not automatically retried.
   const claim=await env.DB.prepare("UPDATE emails SET notification_status='unknown' WHERE email_id=? AND notification_status='queued'").bind(job.email_id).run();
   if(claim.meta.changes!==1) return;
-  const notice='📨 '+e.category+'\n\nТема: '+e.subject+'\nОт: '+e.from_name+'\n\n'+e.summary+'\n\nДействие: '+e.action;
+  const source=await env.DB.prepare(
+    "SELECT classification,task_id FROM inbound_events WHERE source_type IN ('gmail','email_ingest') AND source_id=?"
+  ).bind(e.email_id).first();
+  const heading=source?.classification==='UPDATE'?'🧩 Дополнение к задаче':
+    source?.classification==='TASK'?'📥 Новая задача':'🔥 Важная рабочая информация';
+  const notice=heading+'\n\nТема: '+e.subject+'\nОт: '+e.from_name+'\n\n'+e.summary+
+    (e.action&&e.action!=='Действий не требуется'?'\n\nЧто требуется: '+e.action:'');
   await send(env,env.TELEGRAM_CHAT_ID,{
     text:notice,
     ...(env.WORKER_EMAIL_WORKER_CALLBACKS_ENABLED==='true'?
-      {reply_markup:emailMarkup(e.email_id)}:{})
+      {reply_markup:source?.task_id?taskMarkup(source.task_id):emailMarkup(e.email_id)}:{})
   });
   await env.DB.prepare("UPDATE emails SET notification_status='sent' WHERE email_id=?").bind(e.email_id).run();
 }
@@ -695,7 +689,7 @@ export default {
     if(path==='/oauth/google/calendar/start')return startCalendarOAuth(request,env);
     if(path==='/oauth/google/start') return startGoogleOAuth(request,env);
     if(path==='/oauth/google/callback') return completeGoogleOAuth(request,env);
-    if(request.method==='GET'&&path==='/health') return ok({ok:true,service:'rahal-mamut',phase:'staging',version:'0.1.0'});
+    if(request.method==='GET'&&path==='/health') return ok({ok:true,service:'personal-assistant',phase:'staging',version:'0.2.0'});
     if(request.method==='GET'&&path==='/health/db') {
       if (!env.DB) return ok({ok:false,phase:'staging',database:'unbound'},503);
       try {

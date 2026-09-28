@@ -1,4 +1,4 @@
-import {backMarkup,taskMarkup,safeText,normalizePriority} from './router.js';
+import {backMarkup,taskMarkup,safeText,normalizePriority,localDayBounds} from './router.js';
 import {proposeCalendar,calendarAgenda,calendarFollowup} from './calendar.js';
 import {outlookAgenda} from './outlook.js';
 import {latestNews} from './news.js';
@@ -7,6 +7,7 @@ import {draftWorkMail} from './work-mail.js';
 import {workOnly,workOnlyReply} from './work-mode.js';
 import {proposeRelay,inviteRelayContact,listRelayContacts} from './telegram-relay.js';
 import {proposeMemory,showMemory,forgetMemory,personalMemory} from './memory.js';
+import {setManualPriority,taskHistory} from './task-store.js';
 
 // Only the already authenticated Telegram owner may call these through the
 // webhook. Task writes are explicit, bounded, and never delegated to an LLM.
@@ -15,14 +16,16 @@ const seconds=()=>Math.floor(Date.now()/1000);
 const trim=(value,max)=>String(value??'').trim().slice(0,max);
 const TASK_MODES=new Set(['TASK_INPUT','TASK_DRAFT','TASK_CLARIFY','TASK_TARGET','TASK_ACTION',
   'CALENDAR_INPUT','PERSONAL_MAIL_INPUT','WORK_MAIL_INPUT','RELAY_INPUT',
-  'TASK_POSTPONE','TASK_POSTPONE_CONFIRM']);
+  'TASK_POSTPONE','TASK_POSTPONE_CONFIRM','TASK_EDIT_DESC','TASK_COMMENT']);
 const approved={chat:'chat',create_task:'create_task',tasks:'tasks',report:'report',
   task_done:'task_done',task_delete:'task_delete',task_progress:'task_progress',
   create_event:'create_event',calendar_today:'calendar_today',calendar_week:'calendar_week',
   draft_email:'draft_email',relay_message:'relay_message',relay_invite:'relay_invite',
   contacts:'contacts',remember:'remember',show_memory:'show_memory',forget_memory:'forget_memory',
   outlook_today:'outlook_today',outlook_week:'outlook_week',
-  public_news:'public_news'};
+  public_news:'public_news',new_tasks:'new_tasks',progress_tasks:'progress_tasks',
+  completed_tasks:'completed_tasks',due_tasks:'due_tasks',work_news:'work_news',
+  source_tasks:'source_tasks',topic_status:'topic_status',week_plan:'week_plan'};
 const pendingMarkup={inline_keyboard:[
   [{text:'✅ Сохранить',callback_data:'task:new:save'},{text:'✏️ Изменить',callback_data:'task:new:change'}],
   [{text:'❌ Отменить',callback_data:'task:new:cancel'},{text:'☰ Меню',callback_data:'menu'}]
@@ -32,6 +35,115 @@ const decisionMarkup={inline_keyboard:[
 ]};
 const actionLabels={task_done:'выполненной',task_delete:'удалённой',task_progress:'в работе'};
 const normalize=(value)=>trim(value,300).toLowerCase().replace(/ё/g,'е').replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+const statusName={NEW:'не в работе',IN_PROGRESS:'в работе',DONE:'выполнена',DELETED:'удалена'};
+
+async function taskView(env,id){
+  const task=await env.DB.prepare(
+    'SELECT t.*,m.source_type,m.source_author,m.source_title,m.source_link,'+
+    'm.suggested_priority,m.manual_priority,m.completed_at FROM tasks t '+
+    'LEFT JOIN task_metadata m ON m.task_id=t.task_id '+
+    "WHERE t.task_id=? AND t.status!='DELETED'"
+  ).bind(id).first();
+  if(!task)return {text:'Задача не найдена.',reply_markup:backMarkup()};
+  const [comments,updates]=await Promise.all([
+    env.DB.prepare('SELECT body,created_at FROM task_comments WHERE task_id=? ORDER BY id DESC LIMIT 3').bind(id).all(),
+    env.DB.prepare('SELECT author,body,created_at FROM task_updates WHERE task_id=? ORDER BY id DESC LIMIT 3').bind(id).all()
+  ]);
+  const manual=task.manual_priority?
+    task.priority+' (установлен вручную)\nПредложение ИИ: '+task.suggested_priority:
+    task.priority+' (предложен ИИ)';
+  const lines=['📋 Задача','',task.title,'',task.description||'Описание не указано.',
+    '', 'Статус: '+(statusName[task.status]||task.status),
+    'Приоритет: '+manual,'Дедлайн: '+(task.due_text||'не указан')];
+  if(task.source_author)lines.push('Автор поручения: '+task.source_author);
+  if(task.source_title)lines.push('Источник: '+task.source_title);
+  if(task.completed_at)lines.push('Завершена: '+task.completed_at);
+  if((updates.results||[]).length>1)lines.push('', 'Последние дополнения:',
+    ...(updates.results||[]).slice(0,3).map(x=>'• '+trim(x.body,260)));
+  if((comments.results||[]).length)lines.push('', 'Комментарии:',
+    ...(comments.results||[]).map(x=>'• '+trim(x.body,220)));
+  return {text:safeText(lines.join('\n')),reply_markup:taskMarkup(task.task_id,task.status)};
+}
+
+async function taskSource(env,id){
+  const meta=await env.DB.prepare(
+    'SELECT m.source_type,m.source_author,m.source_title,m.source_link,m.original_text,t.status '+
+    'FROM task_metadata m JOIN tasks t ON t.task_id=m.task_id WHERE m.task_id=?'
+  ).bind(id).first();
+  if(!meta)return {text:'Для этой старой задачи исходное сообщение не сохранено.',reply_markup:taskMarkup(id)};
+  const additions=await env.DB.prepare(
+    'SELECT author,body,source_link,created_at FROM task_updates WHERE task_id=? ORDER BY id DESC LIMIT 5'
+  ).bind(id).all();
+  const lines=['📎 Исходное поручение','',
+    'Источник: '+(meta.source_title||meta.source_type||'не указан'),
+    'Автор: '+(meta.source_author||'не указан'),'',meta.original_text||'Текст исходника не сохранён.'];
+  if(meta.source_link)lines.push('','Открыть оригинал: '+meta.source_link);
+  if((additions.results||[]).length>1)lines.push('','Связанные сообщения:',
+    ...(additions.results||[]).slice(0,4).map(x=>'• '+trim(x.body,300)+
+      (x.source_link?'\n  '+x.source_link:'')));
+  return {text:safeText(lines.join('\n')),reply_markup:taskMarkup(id,meta.status)};
+}
+
+async function groundedTasks(env,{status='',author='',from='',to='',topic='',title='Задачи'}={}){
+  const where=["t.status!='DELETED'"],bind=[];
+  if(status){where.push('t.status=?');bind.push(status);}
+  if(author){where.push('lower(COALESCE(m.source_author,\'\')) LIKE ?');bind.push('%'+author.toLowerCase().slice(0,90)+'%');}
+  if(topic){
+    const term='%'+topic.toLowerCase().slice(0,90)+'%';
+    where.push('(lower(t.title) LIKE ? OR lower(t.description) LIKE ? OR EXISTS '+
+      '(SELECT 1 FROM task_updates u WHERE u.task_id=t.task_id AND lower(u.body) LIKE ?))');
+    bind.push(term,term,term);
+  }
+  if(from&&Number.isFinite(Date.parse(from))){where.push("t.due_iso!='' AND t.due_iso>=?");bind.push(new Date(from).toISOString());}
+  if(to&&Number.isFinite(Date.parse(to))){where.push("t.due_iso!='' AND t.due_iso<=?");bind.push(new Date(to).toISOString());}
+  const result=await env.DB.prepare(
+    'SELECT t.task_id,t.title,t.status,t.priority,t.due_text,m.source_author FROM tasks t '+
+    'LEFT JOIN task_metadata m ON m.task_id=t.task_id WHERE '+where.join(' AND ')+
+    " ORDER BY CASE t.priority WHEN 'высокий' THEN 0 WHEN 'средний' THEN 1 ELSE 2 END,"+
+    "CASE WHEN t.due_iso='' THEN 1 ELSE 0 END,t.due_iso ASC,t.updated_at DESC LIMIT 12"
+  ).bind(...bind).all();
+  const rows=result.results||[];
+  if(!rows.length)return {text:title+'\n\nНичего не найдено.',reply_markup:backMarkup()};
+  return {text:safeText(title+'\n\n'+rows.map((x,i)=>(i+1)+'. '+x.title+
+    '\n   '+(statusName[x.status]||x.status)+' | '+x.priority+' | '+(x.due_text||'без срока')+
+    (x.source_author?' | '+x.source_author:'')).join('\n\n')),
+    reply_markup:{inline_keyboard:[...rows.slice(0,8).map((x,i)=>[{
+      text:(i+1)+'. '+trim(x.title,35),callback_data:'task:view:'+x.task_id
+    }]),[{text:'☰ Меню',callback_data:'menu'}]]}};
+}
+
+async function groundedNews(env,topic=''){
+  const term='%'+String(topic||'').toLowerCase().slice(0,90)+'%';
+  const filter=topic?' AND (lower(subject) LIKE ? OR lower(summary) LIKE ?)':'';
+  const tgFilter=topic?' AND (lower(summary) LIKE ? OR lower(body) LIKE ?)':'';
+  const [mail,tg]=await Promise.all([
+    env.DB.prepare("SELECT email_id,subject AS title,summary,from_name AS author,received_at AS at FROM emails "+
+      "WHERE action='Действий не требуется' AND (category IN ('НОВОСТЬ','FYI','ВАЖНО') OR "+
+      "EXISTS(SELECT 1 FROM inbound_events i WHERE i.source_id=emails.email_id AND i.classification IN ('NEWS','INFO')))"+filter+
+      ' ORDER BY received_at DESC LIMIT 8').bind(...(topic?[term,term]:[])).all(),
+    env.DB.prepare("SELECT id,summary AS title,body AS summary,sender_name AS author,created_at AS at FROM telegram_mentions "+
+      "WHERE category IN ('NEWS','INFO') AND status='done'"+tgFilter+
+      ' ORDER BY created_at DESC LIMIT 8').bind(...(topic?[term,term]:[])).all()
+  ]);
+  const items=[...(mail.results||[]).map(x=>({...x,kind:'email'})),
+    ...(tg.results||[]).map(x=>({...x,kind:'mention'}))]
+    .sort((a,b)=>String(b.at).localeCompare(String(a.at))).slice(0,10);
+  if(!items.length)return {text:'📰 Новости (интересное)\n\nПо сохранённым данным ничего нового не найдено.',reply_markup:backMarkup()};
+  return {text:safeText('📰 Новости (интересное)'+(topic?' по теме «'+topic+'»':'')+'\n\n'+
+    items.map((x,i)=>(i+1)+'. '+trim(x.title||x.summary,160)+
+      (x.author?'\n   От: '+trim(x.author,80):'')).join('\n\n')),
+    reply_markup:{inline_keyboard:[...items.slice(0,8).map((x,i)=>[{
+      text:(i+1)+'. '+trim(x.title||x.summary,35),callback_data:(x.kind==='email'?'email:view:':'mention:view:')+(x.email_id||x.id)
+    }]),[{text:'☰ Меню',callback_data:'menu'}]]}};
+}
+
+async function weekPlan(env){
+  const bounds=localDayBounds(new Date(),300);
+  const end=new Date(bounds.start.getTime()+7*86400000).toISOString();
+  const view=await groundedTasks(env,{to:end,title:'📅 План на ближайшие 7 дней'});
+  if(!view.text.includes('Ничего не найдено.'))return view;
+  return groundedTasks(env,{title:'📅 План недели - активные задачи без указанного срока'});
+}
 
 async function state(env,chatId) {
   return env.DB.prepare('SELECT mode,data FROM states WHERE chat_id=?').bind(chatId).first();
@@ -123,6 +235,7 @@ async function interpret(env,chatId,text,context) {
     location:{type:'string'},calendar_target:{type:'string',enum:['personal','work']},
     recipient:{type:'string'},message:{type:'string'},
     note:{type:'string'},memory_index:{type:'string'},news_query:{type:'string'},
+    author:{type:'string'},topic:{type:'string'},date_from:{type:'string'},date_to:{type:'string'},
     work_scope:{type:'string',enum:['work','personal','unsure']}
   };
   const system=[
@@ -138,12 +251,19 @@ async function interpret(env,chatId,text,context) {
     'draft_email: точный адрес в to, тема subject, просьба в instruction. НЕ выдумывай email.',
     'relay_message: recipient и message. Бот пишет только подключившимся получателям.',
     'relay_invite: пригласить recipient. contacts: подключённые получатели.',
-    'public_news: запрос свежих внешних новостей; news_query содержит тему, по умолчанию Казахстан. Нельзя выдумывать новости.',
+    'public_news: только явный запрос свежих внешних новостей из интернета; news_query содержит тему. Нельзя выдумывать новости.',
+    'new_tasks: новые задачи, которые владелец ещё не взял в работу. progress_tasks: задачи в работе. completed_tasks: выполненные.',
+    'due_tasks: задачи к названному сроку. Заполни date_from/date_to ISO с UTC+05:00 только по словам владельца.',
+    'work_news: новости и информация из уже сохранённых рабочих источников; topic содержит тему, если она названа.',
+    'source_tasks: поручения от конкретного коллеги; author содержит имя без домыслов.',
+    'topic_status: что нового или какой статус по проекту/теме; topic обязателен.',
+    'week_plan: составить план на неделю только из сохранённых задач.',
     'remember: явно сохранить note. show_memory: показать заметки. forget_memory: номер memory_index.',
     'Если не хватает email, темы, даты, времени или имени, задай один уточняющий вопрос.',
     'Создание, удаление и смена статуса никогда не выполнены на этапе распознавания. Не утверждай, что запись сохранена или удалена.',
     'Если он просто рассказывает историю или спрашивает совет, intent=chat, ответь в reply естественно и содержательно.',
     'При создании заполняй title конкретным кратким действием, description деталями, due_text только явно заданным сроком, due_iso только при однозначной дате. Никаких придуманных дедлайнов.',
+    'На вопросы о задачах, коллегах, сроках, проектах и рабочих новостях не отвечай фактами в reply. Выбери подходящий intent, чтобы ответ был построен только из базы данных.',
     'Если действие неясно, needs_details=true и один точный вопрос в question. Иначе needs_details=false.',
     'Для обновления уже предложенной задачи используй предыдущий draft и последнее уточнение. Не теряй прежние поля, если не менялись.',
     'При закрытии/удалении укажи в target название нужной существующей задачи; ничего не выдумывай.',
@@ -194,10 +314,17 @@ async function saveDraft(env,chatId,updateId) {
   if(!d.title)return {text:'Не удалось сохранить задачу без названия.',reply_markup:backMarkup()};
   // Telegram update ID makes a retry idempotent even after a D1 network error.
   const id='tg:'+String(updateId);
-  await env.DB.prepare(
+  const stored=await env.DB.prepare(
     'INSERT OR IGNORE INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) '+
     'VALUES(?,NULL,?,?,?,?,?,?,?,?)'
   ).bind(id,d.title,d.description,'NEW',d.priority,d.due_iso,d.due_text,now(),now()).run();
+  if(stored.meta.changes===1){
+    await env.DB.prepare(
+      'INSERT OR IGNORE INTO task_metadata(task_id,source_type,source_id,source_title,original_text,suggested_priority,last_source_at) '+
+      "VALUES(?,'telegram_bot',?,'Сообщение боту',?,?,?)"
+    ).bind(id,String(updateId),trim(d.description||d.title,3000),d.priority,now()).run();
+    await taskHistory(env,id,'CREATED','Создано владельцем через Telegram-бота');
+  }
   await clearState(env,chatId);
   return {text:'✅ Задача сохранена:\n'+d.title+
     (d.due_text?'\nСрок: '+d.due_text:''),reply_markup:taskMarkup(id)};
@@ -241,6 +368,11 @@ async function confirmAction(env,chatId) {
     .bind(name,now(),data.task_id).run();
   await clearState(env,chatId);
   if(result.meta.changes!==1)return {text:'Задача уже изменена или не найдена.',reply_markup:backMarkup()};
+  if(name==='DONE')await env.DB.prepare(
+    'INSERT INTO task_metadata(task_id,completed_at,last_source_at) VALUES(?,?,\'\') '+
+    'ON CONFLICT(task_id) DO UPDATE SET completed_at=excluded.completed_at'
+  ).bind(data.task_id,now()).run();
+  await taskHistory(env,data.task_id,'STATUS',name);
   const verb={DONE:'выполнена',DELETED:'удалена из активного списка',IN_PROGRESS:'в работе'}[name];
   return {text:'✅ Задача '+verb+':\n'+trim(data.title,180),reply_markup:backMarkup()};
 }
@@ -260,22 +392,35 @@ export async function taskList(env) {
     ]}};
 }
 export async function taskReport(env) {
-  const [counts,latest]=await Promise.all([
+  const soon=new Date(Date.now()+72*3600000).toISOString();
+  const since=new Date(Date.now()-24*3600000).toISOString();
+  const [counts,urgent,deadlines,recent]=await Promise.all([
     env.DB.prepare("SELECT status,COUNT(*) AS n FROM tasks WHERE status!='DELETED' GROUP BY status").all(),
     env.DB.prepare(
-      "SELECT title,status,updated_at FROM tasks WHERE status!='DELETED' ORDER BY updated_at DESC LIMIT 6"
-    ).all()
+      "SELECT title,status FROM tasks WHERE status NOT IN ('DONE','DELETED') AND priority='высокий' ORDER BY updated_at DESC LIMIT 5"
+    ).all(),
+    env.DB.prepare(
+      "SELECT title,due_text,due_iso FROM tasks WHERE status NOT IN ('DONE','DELETED') AND due_iso!='' AND due_iso<=? ORDER BY due_iso ASC LIMIT 6"
+    ).bind(soon).all(),
+    env.DB.prepare(
+      "SELECT classification,COUNT(*) AS n FROM inbound_events WHERE created_at>=? GROUP BY classification"
+    ).bind(since).all()
   ]);
   const map=Object.fromEntries((counts.results||[]).map(x=>[x.status,Number(x.n)]));
   const done=map.DONE||0,ongoing=map.IN_PROGRESS||0,waiting=map.NEW||0;
-  return {text:'📊 Отчёт по задачам\n\n'+
-    '⚪ Новые: '+waiting+'\n🟡 В работе: '+ongoing+'\n✅ Выполнено: '+done+
-    '\n📌 Всего без удалённых: '+(waiting+ongoing+done)+
-    '\n\nПоследние изменения:\n'+((latest.results||[]).length?
-      latest.results.map(x=>(x.status==='DONE'?'✅ ':x.status==='IN_PROGRESS'?'🟡 ':'⚪ ')+
-        trim(x.title,100)).join('\n'):'Пока записей нет.'),
+  const incoming=Object.fromEntries((recent.results||[]).map(x=>[x.classification,Number(x.n)]));
+  return {text:safeText('📊 Сводка\n\n'+
+    '📥 Не в работе: '+waiting+'\n🟡 В работе: '+ongoing+'\n✅ Выполнено: '+done+
+    '\n\n🔥 Срочные:\n'+((urgent.results||[]).length?
+      urgent.results.map(x=>'• '+trim(x.title,115)).join('\n'):'Нет.')+
+    '\n\n⏰ Дедлайны в ближайшие 72 часа:\n'+((deadlines.results||[]).length?
+      deadlines.results.map(x=>'• '+trim(x.title,105)+' - '+trim(x.due_text||x.due_iso,70)).join('\n'):'Нет.')+
+    '\n\n🆕 За последние 24 часа: '+
+      ((incoming.TASK||0)+' задач, '+(incoming.UPDATE||0)+' дополнений, '+
+       ((incoming.NEWS||0)+(incoming.INFO||0))+' новостей.')),
     reply_markup:{inline_keyboard:[
-      [{text:'📋 Активные задачи',callback_data:'tasks'},{text:'➕ Задача',callback_data:'newtask'}],
+      [{text:'📥 Не в работе',callback_data:'tasks'},{text:'🟡 В работе',callback_data:'progress'}],
+      [{text:'📰 Новости',callback_data:'news'},{text:'➕ Задача',callback_data:'newtask'}],
       [{text:'☰ Меню',callback_data:'menu'}]
     ]}};
 }
@@ -290,6 +435,103 @@ export async function taskMenuAction(env,chatId,action) {
   return null;
 }
 export async function taskCallback(env,chatId,callback,updateId) {
+  if(callback.startsWith('task:view:'))return taskView(env,callback.slice('task:view:'.length));
+  if(callback.startsWith('task:source:'))return taskSource(env,callback.slice('task:source:'.length));
+  if(callback.startsWith('task:progress:')){
+    const id=callback.slice('task:progress:'.length);
+    const task=await env.DB.prepare(
+      "SELECT t.title,t.priority,m.suggested_priority FROM tasks t LEFT JOIN task_metadata m ON m.task_id=t.task_id "+
+      "WHERE t.task_id=? AND t.status='NEW'"
+    ).bind(id).first();
+    if(!task)return {text:'Задача уже взята в работу или закрыта.',reply_markup:backMarkup()};
+    return {text:safeText('Какой приоритет установить для «'+task.title+'»?\n'+
+      'ИИ предложил: '+(task.suggested_priority||task.priority)),
+      reply_markup:{inline_keyboard:[
+        [{text:'🔴 Высокий',callback_data:'task:priority:high:'+id}],
+        [{text:'🟡 Средний',callback_data:'task:priority:medium:'+id}],
+        [{text:'🟢 Низкий',callback_data:'task:priority:low:'+id}],
+        [{text:'☰ Меню',callback_data:'menu'}]
+      ]}};
+  }
+  if(callback.startsWith('task:priority-menu:')){
+    const id=callback.slice('task:priority-menu:'.length);
+    const task=await env.DB.prepare(
+      "SELECT title FROM tasks WHERE task_id=? AND status='IN_PROGRESS'"
+    ).bind(id).first();
+    if(!task)return {text:'Изменить приоритет можно у задачи в работе.',reply_markup:backMarkup()};
+    return {text:'Новый приоритет для «'+trim(task.title,150)+'»: ',
+      reply_markup:{inline_keyboard:[
+        [{text:'🔴 Высокий',callback_data:'task:priority:high:'+id}],
+        [{text:'🟡 Средний',callback_data:'task:priority:medium:'+id}],
+        [{text:'🟢 Низкий',callback_data:'task:priority:low:'+id}],
+        [{text:'☰ Меню',callback_data:'menu'}]
+      ]}};
+  }
+  if(callback.startsWith('task:priority:')){
+    const match=/^task:priority:(high|medium|low):(.+)$/.exec(callback);
+    if(!match)return {text:'Некорректный выбор приоритета.',reply_markup:backMarkup()};
+    const value={high:'высокий',medium:'средний',low:'низкий'}[match[1]];
+    const task=await env.DB.prepare(
+      "SELECT title,status FROM tasks WHERE task_id=? AND status IN ('NEW','IN_PROGRESS')"
+    ).bind(match[2]).first();
+    if(!task)return {text:'Задача уже закрыта или удалена.',reply_markup:backMarkup()};
+    if(task.status==='NEW'){
+      await env.DB.prepare(
+        "UPDATE tasks SET status='IN_PROGRESS',updated_at=? WHERE task_id=? AND status='NEW'"
+      ).bind(now(),match[2]).run();
+      await taskHistory(env,match[2],'STATUS','IN_PROGRESS');
+    }
+    await setManualPriority(env,match[2],value);
+    return {text:'🟡 Задача в работе. Приоритет: '+value+'.',
+      reply_markup:taskMarkup(match[2],'IN_PROGRESS')};
+  }
+  if(callback.startsWith('task:edit:')){
+    const id=callback.slice('task:edit:'.length);
+    const task=await env.DB.prepare(
+      "SELECT task_id,title FROM tasks WHERE task_id=? AND status='IN_PROGRESS'"
+    ).bind(id).first();
+    if(!task)return {text:'Редактировать можно только задачу в работе.',reply_markup:backMarkup()};
+    await setState(env,chatId,'TASK_EDIT_DESC',task);
+    return {text:'Пришли новое полное описание задачи «'+trim(task.title,150)+'».',reply_markup:backMarkup()};
+  }
+  if(callback.startsWith('task:comment:')){
+    const id=callback.slice('task:comment:'.length);
+    const task=await env.DB.prepare(
+      "SELECT task_id,title FROM tasks WHERE task_id=? AND status='IN_PROGRESS'"
+    ).bind(id).first();
+    if(!task)return {text:'Комментарий можно добавить только к задаче в работе.',reply_markup:backMarkup()};
+    await setState(env,chatId,'TASK_COMMENT',task);
+    return {text:'Напиши комментарий к задаче «'+trim(task.title,150)+'».',reply_markup:backMarkup()};
+  }
+  if(callback.startsWith('task:done:')){
+    const id=callback.slice('task:done:'.length),stamp=now();
+    const result=await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE tasks SET status='DONE',updated_at=? WHERE task_id=? AND status NOT IN ('DONE','DELETED')"
+      ).bind(stamp,id),
+      env.DB.prepare(
+        'INSERT INTO task_metadata(task_id,completed_at,last_source_at) VALUES(?,?,\'\') '+
+        'ON CONFLICT(task_id) DO UPDATE SET completed_at=excluded.completed_at'
+      ).bind(id,stamp)
+    ]);
+    if(result[0]?.meta?.changes===1)await taskHistory(env,id,'STATUS','DONE');
+    return {text:result[0]?.meta?.changes===1?'✅ Задача выполнена.':'Задача уже закрыта или удалена.',
+      reply_markup:backMarkup()};
+  }
+  if(callback.startsWith('task:restore:')){
+    const id=callback.slice('task:restore:'.length),stamp=now();
+    const result=await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE tasks SET status='IN_PROGRESS',updated_at=? WHERE task_id=? AND status='DONE'"
+      ).bind(stamp,id),
+      env.DB.prepare(
+        "UPDATE task_metadata SET completed_at='',restored_at=? WHERE task_id=?"
+      ).bind(stamp,id)
+    ]);
+    if(result[0]?.meta?.changes===1)await taskHistory(env,id,'STATUS','IN_PROGRESS_RESTORED');
+    return {text:result[0]?.meta?.changes===1?'↩️ Задача возвращена в работу.':'Задача не найдена в выполненных.',
+      reply_markup:result[0]?.meta?.changes===1?taskMarkup(id,'IN_PROGRESS'):backMarkup()};
+  }
   if(callback==='task:postpone:cancel'){
     const prior=await state(env,chatId);
     if(['TASK_POSTPONE','TASK_POSTPONE_CONFIRM'].includes(prior?.mode))
@@ -309,6 +551,7 @@ export async function taskCallback(env,chatId,callback,updateId) {
       "WHERE task_id=? AND status NOT IN ('DONE','DELETED')"
     ).bind(iso,trim(data.due_text,100),now(),data.task_id).run();
     await clearState(env,chatId);
+    if(updated.meta.changes===1)await taskHistory(env,data.task_id,'DEADLINE',trim(data.due_text,100));
     return {text:updated.meta.changes===1?
       '📅 Новый срок задачи «'+trim(data.title,180)+'»: '+trim(data.due_text,100):
       'Задача уже закрыта или не найдена. Срок не изменён.',reply_markup:backMarkup()};
@@ -370,6 +613,33 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
   if(current && /^(нет|отмена|не надо|отмени)$/i.test(user)) {
     await clearState(env,chatId);
     return {text:'Отменено. Ничего не изменено.',reply_markup:backMarkup()};
+  }
+  if(current?.mode==='TASK_EDIT_DESC'){
+    const description=trim(user,1800);
+    const result=await env.DB.prepare(
+      "UPDATE tasks SET description=?,updated_at=? WHERE task_id=? AND status='IN_PROGRESS'"
+    ).bind(description,now(),data.task_id).run();
+    await clearState(env,chatId);
+    if(result.meta.changes===1)await taskHistory(env,data.task_id,'DESCRIPTION',description);
+    return {text:result.meta.changes===1?'✏️ Описание обновлено.':'Задача уже закрыта или не найдена.',
+      reply_markup:result.meta.changes===1?taskMarkup(data.task_id,'IN_PROGRESS'):backMarkup()};
+  }
+  if(current?.mode==='TASK_COMMENT'){
+    const comment=trim(user,1000),stamp=now();
+    const active=await env.DB.prepare(
+      "SELECT task_id FROM tasks WHERE task_id=? AND status='IN_PROGRESS'"
+    ).bind(data.task_id).first();
+    if(active){
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO task_comments(task_id,body,created_at) VALUES(?,?,?)')
+          .bind(data.task_id,comment,stamp),
+        env.DB.prepare('UPDATE tasks SET updated_at=? WHERE task_id=?').bind(stamp,data.task_id)
+      ]);
+      await taskHistory(env,data.task_id,'COMMENT',comment);
+    }
+    await clearState(env,chatId);
+    return {text:active?'💬 Комментарий добавлен.':'Задача уже закрыта или не найдена.',
+      reply_markup:active?taskMarkup(data.task_id,'IN_PROGRESS'):backMarkup()};
   }
   if(prev?.mode==='CALENDAR_DRAFT'||prev?.mode==='CALENDAR_EDIT'){
     if(/^(отмена|нет|не надо|отмени)$/i.test(user)||
@@ -526,6 +796,27 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
     return inviteRelayContact(env,chatId,intent.recipient);
   if(intent.intent==='contacts')return listRelayContacts(env);
   if(intent.intent==='public_news')return latestNews(intent.news_query||'Казахстан');
+  if(intent.intent==='new_tasks')return groundedTasks(env,{status:'NEW',title:'📥 Задачи (не в работе)'});
+  if(intent.intent==='progress_tasks')return groundedTasks(env,{status:'IN_PROGRESS',title:'🟡 Задачи (в работе)'});
+  if(intent.intent==='completed_tasks')return groundedTasks(env,{status:'DONE',title:'✅ Выполненные задачи'});
+  if(intent.intent==='due_tasks'){
+    let from=intent.date_from,to=intent.date_to;
+    if(!from&&!to){
+      const bounds=localDayBounds(new Date(),300);
+      from=bounds.start.toISOString();to=bounds.end.toISOString();
+    }
+    return groundedTasks(env,{from,to,title:'⏰ Задачи к указанному сроку'});
+  }
+  if(intent.intent==='work_news')return groundedNews(env,intent.topic);
+  if(intent.intent==='source_tasks')return groundedTasks(env,{author:intent.author,
+    title:'👥 Поручения от '+(trim(intent.author,90)||'коллег')});
+  if(intent.intent==='topic_status'){
+    if(!trim(intent.topic,90))return {text:'По какой теме или проекту посмотреть данные?',reply_markup:backMarkup()};
+    const tasks=await groundedTasks(env,{topic:intent.topic,title:'📋 Задачи по теме «'+trim(intent.topic,90)+'»'});
+    const news=await groundedNews(env,intent.topic);
+    return {text:safeText(tasks.text+'\n\n'+news.text),reply_markup:backMarkup()};
+  }
+  if(intent.intent==='week_plan')return weekPlan(env);
   if(intent.intent==='remember')return proposeMemory(env,chatId,intent.note);
   if(intent.intent==='show_memory')return showMemory(env,chatId);
   if(intent.intent==='forget_memory')return forgetMemory(env,chatId,intent.memory_index);

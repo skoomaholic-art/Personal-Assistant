@@ -1,4 +1,5 @@
 import {backMarkup,normalizePriority,taskMarkup} from './router.js';
+import {storeSourceEvent} from './task-store.js';
 
 const cut=(value,max)=>String(value??'').trim().slice(0,max);
 const ID=/^[A-Za-z0-9_-]{4,160}$/;
@@ -28,16 +29,18 @@ export async function createTaskFromWorkEmail(env,id){
     '\nТема: '+email.subject+'\n\n'+email.summary,900);
   const deadline=!review&&Number.isFinite(Date.parse(email.deadline_iso))?
     cut(email.deadline_iso,40):'';
-  const instant=new Date().toISOString();
-  await env.DB.prepare(
-    'INSERT OR IGNORE INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) '+
-    "VALUES(?,?,?,?,'NEW',?,?,?,?,?)"
-  ).bind(crypto.randomUUID(),id,title,description,
-    normalizePriority(email.priority),deadline,
-    review?'':cut(email.deadline_text,100),instant,instant).run();
+  const stored=await storeSourceEvent(env,{
+    sourceType:'gmail',sourceId:id,threadKey:'gmail-message:'+id,
+    author:email.from_name,sourceTitle:'Рабочее письмо: '+email.subject,
+    sourceLink:'https://mail.google.com/mail/u/0/#all/'+id,
+    originalText:email.summary,classification:'TASK',title,description,
+    priority:normalizePriority(email.priority),dueIso:deadline,
+    dueText:review?'':cut(email.deadline_text,100),emailId:id,
+    createdAt:new Date().toISOString()
+  });
   const task=await env.DB.prepare(
-    'SELECT task_id,title,status FROM tasks WHERE email_id=?'
-  ).bind(id).first();
+    'SELECT task_id,title,status FROM tasks WHERE task_id=?'
+  ).bind(stored.taskId).first();
   return task?{text:'✅ Задача сохранена:\n'+task.title,
     reply_markup:taskMarkup(task.task_id,task.status)}:
     {text:'Не удалось сохранить задачу. Повтори позже.',

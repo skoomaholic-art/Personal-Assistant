@@ -9,7 +9,7 @@ export function commandOf(update) {
     '/cancel': 'cancel', 'отмена': 'cancel', '/reset': 'reset',
     '/today': 'today', '/week': 'week', '/important': 'important',
     '/news': 'news', '/colleagues': 'colleagues', '/search': 'search',
-    '/tasks': 'tasks', '/progress': 'progress', '/done': 'done', '/report': 'report', '/new': 'newtask', '/mail': 'mail',
+    '/tasks': 'tasks', '/progress': 'progress', '/done': 'done', '/report': 'report', '/summary': 'report', '/new': 'newtask', '/mail': 'mail',
     '/calendar': 'calendar', '/compose': 'compose', '/contacts': 'contacts',
     '/review': 'review',
     '/memory': 'memory', '/brief': 'brief', '/app': 'app'
@@ -20,10 +20,11 @@ export function commandOf(update) {
   if (lower.includes('на неделю')) return 'week';
   if (lower.includes('новост')) return 'news';
   if (lower.includes('коллег') && lower.includes('письм')) return 'colleagues';
-  if (lower === 'задачи в работе' || lower === 'в работе') return 'progress';
+  if (lower === 'задачи в работе' || lower === 'задачи (в работе)' || lower === 'в работе') return 'progress';
   if (lower === 'выполненные' || lower === 'выполненные задачи') return 'done';
-  if (lower === 'список задач' || lower === 'покажи задачи' || lower === 'мои задачи') return 'tasks';
-  if (lower === 'отчёт по задачам' || lower === 'отчет по задачам') return 'report';
+  if (lower === 'список задач' || lower === 'покажи задачи' || lower === 'мои задачи' ||
+      lower === 'задачи не в работе' || lower === 'задачи (не в работе)') return 'tasks';
+  if (lower === 'отчёт по задачам' || lower === 'отчет по задачам' || lower === 'сводка') return 'report';
   if (lower === 'проверь почту' || lower === 'проверить почту') return 'mail:refresh';
   if (lower === 'на разбор' || lower === 'проверь неопределённые' ||
       lower === 'покажи непонятные сообщения') return 'review';
@@ -33,7 +34,15 @@ export function getChatId(update) {
   const chat = update?.callback_query?.message?.chat ?? update?.message?.chat;
   return chat?.id == null ? null : String(chat.id);
 }
-export const QUICK_ACTIONS = new Set(['menu', 'cancel', 'reset', 'reset:no']);
+export const QUICK_ACTIONS = new Set([
+  'menu','cancel','reset','reset:no','reset:yes','more','tasks','progress','done',
+  'report','review','important','colleagues','week','news','mail','newtask','search','voicehelp'
+]);
+export function isQuickAction(action) {
+  const value=String(action||'');
+  return QUICK_ACTIONS.has(value)||
+    /^(?:task:|mention:view:|mention:(?:task|news|ignore):|email:view:|email:(?:task|news|ignore):)/.test(value);
+}
 export function hasValidSecret(received, expected) {
   if (typeof received !== 'string' || typeof expected !== 'string' || !expected.length || received.length !== expected.length) return false;
   let diff = 0;
@@ -51,10 +60,11 @@ export function menuMarkup(miniAppUrl='') {
     ? {text:'📱 Панель',web_app:{url:miniAppUrl}}
     : {text:'🎙 Голосом',callback_data:'voicehelp'};
   return {inline_keyboard: [
-    [{text:'📥 Задачи',callback_data:'tasks'},{text:'🟡 В работе',callback_data:'progress'}],
-    [{text:'✅ Выполненные',callback_data:'done'},{text:'📰 Новости',callback_data:'news'}],
-    [{text:'📨 Почта',callback_data:'mail'},{text:'➕ Новая задача',callback_data:'newtask'}],
-    [{text:'🔎 Поиск',callback_data:'search'},{text:'📊 Отчёт',callback_data:'report'}],
+    [{text:'📥 Задачи (не в работе)',callback_data:'tasks'}],
+    [{text:'🟡 Задачи (в работе)',callback_data:'progress'}],
+    [{text:'✅ Выполненные',callback_data:'done'},{text:'📰 Новости (интересное)',callback_data:'news'}],
+    [{text:'📊 Сводка',callback_data:'report'},{text:'➕ Новая задача',callback_data:'newtask'}],
+    [{text:'📨 Почта',callback_data:'mail'},{text:'🔎 Поиск',callback_data:'search'}],
     [{text:'🗓 Календарь',callback_data:'calendar'},{text:'✉️ Написать',callback_data:'compose'}],
     [panel,{text:'☰ Ещё',callback_data:'more'}]
   ]};
@@ -74,7 +84,18 @@ export function emailMarkup(emailId) { return {inline_keyboard:[
 ]}; }
 export function taskMarkup(taskId,status='NEW') { return {inline_keyboard:[
   ...(status==='NEW' ? [[{text:'🟡 Взять в работу',callback_data:'task:progress:'+taskId}]] : []),
-  ...(status!=='DONE' ? [[{text:'✅ Выполнено',callback_data:'task:done:'+taskId}]] : []),
+  ...(status==='IN_PROGRESS' ? [
+    [{text:'🎯 Приоритет',callback_data:'task:priority-menu:'+taskId},
+     {text:'📅 Дедлайн',callback_data:'task:postpone:'+taskId}],
+    [{text:'✏️ Описание',callback_data:'task:edit:'+taskId},
+     {text:'💬 Комментарий',callback_data:'task:comment:'+taskId}],
+    [{text:'📎 Исходник',callback_data:'task:source:'+taskId},
+     {text:'✅ Выполнено',callback_data:'task:done:'+taskId}]
+  ] : []),
+  ...(status==='DONE' ? [[
+    {text:'↩️ Вернуть в работу',callback_data:'task:restore:'+taskId},
+    {text:'📎 Исходник',callback_data:'task:source:'+taskId}
+  ]] : []),
   [{text:'🗑 Удалить',callback_data:'task:delete:ask:'+taskId},{text:'☰ Меню',callback_data:'menu'}]
 ]}; }
 export function normalizePriority(value) { return ['высокий','средний','низкий'].includes(value) ? value : 'средний'; }

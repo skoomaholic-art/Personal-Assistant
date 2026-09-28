@@ -1,7 +1,7 @@
 // Durable reminder delivery adapted from legacy Storage.gs/runReminders.
 // All delivery is opt-in, and no real message is sent in staging by default.
 const MAX_REMINDERS_PER_TICK=6;
-const MIN_REPEAT_SECONDS=4*60*60;
+const MIN_REPEAT_SECONDS=12*60*60;
 function dueMillis(value) {
   const ms=Date.parse(String(value||''));
   return Number.isFinite(ms)?ms:null;

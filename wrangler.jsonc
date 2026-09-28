@@ -10,10 +10,11 @@
     "WORK_DOMAIN": "fmedia.kz",
     "TZ_OFFSET_MINUTES": "300",
     "MAIL_INGEST_ENABLED": "false",
-    "WORKER_EMAIL_NOTIFICATIONS": "false",
+    "WORKER_EMAIL_NOTIFICATIONS": "true",
+    "WORKER_EMAIL_WORKER_CALLBACKS_ENABLED": "true",
     "WORK_EMAIL": "alexandr.petrossov@fmedia.kz",
     "GMAIL_POLL_ENABLED": "true",
-    "REMINDERS_ENABLED": "false",
+    "REMINDERS_ENABLED": "true",
     "REPLY_PREVIEWS_ENABLED": "false",
     "GMAIL_THREAD_CONTEXT_ENABLED": "false",
     "GOOGLE_OAUTH_REDIRECT_URI": "https://rahal-mamut-staging.alexandr-petrossov.workers.dev/oauth/google/callback",
@@ -33,13 +34,13 @@
     "MINIAPP_URL": "https://rahal-mamut-staging.alexandr-petrossov.workers.dev/app",
     "OUTLOOK_CALENDAR_READ_ENABLED": "false",
     "OUTLOOK_CALENDAR_WRITE_ENABLED": "false",
-    "OUTLOOK_AI_ENABLED": "false",
+    "OUTLOOK_AI_ENABLED": "true",
     "ASSISTANT_SCOPE": "work",
     "WORK_OUTLOOK_SEND_ENABLED": "false",
     "TELEGRAM_MENTIONS_ENABLED": "true",
     "TELEGRAM_MENTION_NOTIFICATIONS_ENABLED": "true",
-    "TELEGRAM_MENTIONS_AI_ENABLED": "false",
-    "TELEGRAM_MENTION_WORKER_CALLBACKS_ENABLED": "false"
+    "TELEGRAM_MENTIONS_AI_ENABLED": "true",
+    "TELEGRAM_MENTION_WORKER_CALLBACKS_ENABLED": "true"
   },
   "d1_databases": [
     {

@@ -15,9 +15,10 @@ export function triageTelegram(text,{privateChat=false,workOnly=false}={}){
   // Chats are opt-in allowlisted. In work mode, do not retain ambiguous
   // private chat content merely because the contact has been selected.
   if(privateChat&&workOnly&&!work)return {category:'SKIP',reason:'no_work_signal'};
+  if(!work&&!informational.test(value)&&!task)return {category:'SKIP',reason:'no_work_signal'};
   const priority=notUrgent.test(value)?'низкий':urgent.test(value)?'высокий':'средний';
   if(task)return {category:'TASK',priority,summary:value.slice(0,280)};
-  if(privateChat||!work&&!informational.test(value))
+  if(privateChat)
     return {category:'REVIEW',priority,summary:value.slice(0,280)};
   return {category:'NEWS',priority,summary:value.slice(0,280)};
 }
