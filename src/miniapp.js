@@ -2,6 +2,7 @@ import {dailyBriefPreview} from './brief.js';
 import {calendarAgenda} from './calendar.js';
 import {outlookAgenda} from './outlook.js';
 import {personalMemory} from './memory.js';
+import {workOnly,WORK_EMAIL_STATUSES} from './work-mode.js';
 
 const json=(data,status=200)=>Response.json(data,{status,headers:{
   'content-type':'application/json; charset=utf-8','cache-control':'private, no-store',
@@ -84,7 +85,8 @@ async function show(tab){
    if(!d.length)box.append(card('Почта','Нет новых писем.'));
   }
   if(tab==='calendar'){const d=await api('calendar');
-   box.replaceChildren(card('Личный календарь',d.personal),card('Рабочий',d.work));}
+   box.replaceChildren(...(d.work_only?[card('Рабочий Outlook',d.work)]:
+     [card('Личный календарь',d.personal),card('Рабочий',d.work)]));}
   if(tab==='memory'){const d=await api('memory');
    box.replaceChildren(card('Подтверждённая память',
     d.map((v,i)=>(i+1)+'. '+v).join('\n')||'Скажи боту «Запомни ...».'));}
@@ -142,7 +144,8 @@ export async function miniApp(request,env){
   if(request.method==='GET'&&section==='mail'){
     const rows=await env.DB.prepare(
       "SELECT subject,summary,from_name,category FROM emails "+
-      "WHERE status NOT IN ('ANALYZING','IGNORED_NONWORK') "+
+      "WHERE "+(workOnly(env)?'status IN '+WORK_EMAIL_STATUSES:
+        "status NOT IN ('ANALYZING','IGNORED_NONWORK')")+" "+
       "ORDER BY received_at DESC LIMIT 35"
     ).all();return json(rows.results||[]);
   }
@@ -152,7 +155,7 @@ export async function miniApp(request,env){
   if(request.method==='GET'&&section==='calendar'){
     const [personal,work]=await Promise.all([
       calendarAgenda(env,'today'),outlookAgenda(env,1)
-    ]);return json({personal:personal.text,work:work.text});
+    ]);return json({personal:personal.text,work:work.text,work_only:workOnly(env)});
   }
   if(request.method==='POST'&&section==='tasks'){
     const rawBody=await request.text();
@@ -162,7 +165,7 @@ export async function miniApp(request,env){
     const dueIso=cut(data.due_iso,40),dueText=cut(data.due_text,100);
     if(!title)return json({error:'title_required'},400);
     if(dueIso&&(!Number.isFinite(Date.parse(dueIso))||
-      !/^d{4}-dd-ddT/.test(dueIso)))
+      !/^\d{4}-\d\d-\d\dT/.test(dueIso)))
       return json({error:'invalid_due_time'},400);
     const id='app:'+crypto.randomUUID(),now=new Date().toISOString();
     await env.DB.prepare(
@@ -171,7 +174,7 @@ export async function miniApp(request,env){
     ).bind(id,title,description,'NEW','средний',dueIso,dueText,now,now).run();
     return json({created:true,task_id:id},201);
   }
-  const match=section.match(/^tasks/([a-zA-Z0-9_:-]{3,80})/(done|progress|delete)$/);
+  const match=section.match(/^tasks\/([a-zA-Z0-9_:-]{3,80})\/(done|progress|delete)$/);
   if(request.method==='POST'&&match){
     const status={done:'DONE',progress:'IN_PROGRESS',delete:'DELETED'}[match[2]];
     const sql=status==='DELETED'?
