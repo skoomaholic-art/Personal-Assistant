@@ -23,14 +23,14 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           let token = (process.env.RAW_CLOUDFLARE_API_TOKEN || '').trim();
-          token = token.replace(/^CLOUDFLARE_API_TOKEN\\s*=\\s*/i, '')
-            .replace(/^Bearer\\s+/i, '').replace(/^["']|["']$/g, '').trim();
-          if (!token || /\\s/.test(token)) {
+          token = token.replace(/^CLOUDFLARE_API_TOKEN\s*=\s*/i, '')
+            .replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();
+          if (!token || /\s/.test(token)) {
             console.error('::error::Cloudflare secret is empty or malformed. Paste the API token value only.');
             process.exit(1);
           }
-          process.stdout.write('::add-mask::' + token + '\\n');
-          fs.appendFileSync(process.env.GITHUB_ENV, 'CLOUDFLARE_API_TOKEN=' + token + '\\n');
+          process.stdout.write('::add-mask::' + token + '\n');
+          fs.appendFileSync(process.env.GITHUB_ENV, 'CLOUDFLARE_API_TOKEN=' + token + '\n');
           NODE
       - name: Ensure idempotent Telegram inbox schema exists on existing D1
         run: npx --yes wrangler@4 d1 execute rahal-mamut-staging --remote --file=migrations/0006_telegram_mentions.sql --config=wrangler.jsonc
