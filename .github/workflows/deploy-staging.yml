@@ -81,6 +81,18 @@ jobs:
           else
             echo '::warning::Could not inspect Cloudflare secret names; worker was already deployed.'
           fi
+      - name: Create missing Telegram webhook secret without exposing it
+        run: |
+          npx --yes wrangler@4 secret list --name rahal-mamut-staging --format json --config=wrangler.jsonc > "$RUNNER_TEMP/bot-secrets.json"
+          if node -e 'const fs=require("node:fs");const v=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+"/bot-secrets.json","utf8"));process.exit(v.some(x=>x.name==="TELEGRAM_WEBHOOK_SECRET")?0:1)'; then
+            echo "Telegram webhook secret already exists, leaving it unchanged."
+          else
+            GENERATED_WEBHOOK_SECRET="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
+            echo "::add-mask::$GENERATED_WEBHOOK_SECRET"
+            printf "%s" "$GENERATED_WEBHOOK_SECRET" | npx --yes wrangler@4 secret put TELEGRAM_WEBHOOK_SECRET --name rahal-mamut-staging --config=wrangler.jsonc
+            unset GENERATED_WEBHOOK_SECRET
+            echo "Telegram webhook secret created. Existing Telegram webhook was NOT changed."
+          fi
       - name: Inspect Worker bindings and retained task counts
         run: |
           node <<'NODE'
