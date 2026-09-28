@@ -3,6 +3,8 @@
 const MAX_AUDIO_BYTES=10*1024*1024;
 const MAX_VOICE_SECONDS=600;
 export async function transcribeTelegramVoice(env,voice) {
+  if(env.ASSISTANT_SCOPE==='work'&&env.OUTLOOK_AI_ENABLED!=='true')
+    return {ok:false,message:'Голосовые рабочие сообщения не передаю внешней AI-модели без разрешения. Пришли текстом.'};
   if(env.TASK_VOICE_ENABLED!=='true')
     return {ok:false,message:'Голосовые пока не включены. Пришли, пожалуйста, сообщение текстом.'};
   if(!env.TELEGRAM_BOT_TOKEN||!env.GROQ_API_KEY)

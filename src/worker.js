@@ -605,6 +605,8 @@ async function prepareAnswer(update, env) {
 }
 
 async function groqChat(env,chatId,userText,updateId) {
+  if(workOnly(env)&&env.OUTLOOK_AI_ENABLED!=='true')
+    return {text:'В рабочем режиме внешний AI-анализ пока выключен. Открой задачи через меню или напиши «Добавь задачу: ...».',reply_markup:backMarkup()};
   if (!env.GROQ_API_KEY) return {text:'AI пока не настроен. Меню и сохранённые задачи доступны.',reply_markup:backMarkup()};
   const start=Date.now();
   const [hist,tasks]=await env.DB.batch([

@@ -85,6 +85,27 @@ async function remember(env,chatId,updateId,user,assistant) {
   ]);
 }
 async function interpret(env,chatId,text,context) {
+  // No corporate messages, task titles, history or notes are sent to Groq
+  // unless external AI processing has been explicitly approved.
+  if(workOnly(env)&&env.OUTLOOK_AI_ENABLED!=='true'){
+    const input=trim(text,2500);
+    const mode=context?.mode||'';
+    const match=/^(?:добавь|создай|запиши|поставь)(?:\s+мне)?\s+(?:новую\s+)?задач[ау]\s*[:\-]?\s*(.*)$/iu.exec(input)||
+      /^задача\s*:\s*(.*)$/iu.exec(input);
+    const name=match?String(match[1]||'').trim():
+      ['TASK_INPUT','TASK_CLARIFY','TASK_DRAFT'].includes(mode)?input:'';
+    if(name || match || ['TASK_INPUT','TASK_CLARIFY','TASK_DRAFT'].includes(mode))
+      return {intent:'create_task',title:name,description:'',due_text:'',due_iso:'',
+        priority:'средний',needs_details:!name,question:'Что конкретно нужно сделать?',work_scope:'work'};
+    if(/^(?:покажи\s+)?(?:мои\s+)?(?:задачи|список задач)$/iu.test(input))
+      return {intent:'tasks',work_scope:'work'};
+    if(/^(?:отчёт|отчет|сводка)(?:\s+по\s+задачам)?$/iu.test(input))
+      return {intent:'report',work_scope:'work'};
+    return {intent:'chat',work_scope:'work',reply:
+      'Пока корпоративные данные не разрешено передавать внешней AI-модели, '+
+      'могу без неё показывать задачи и отчёт. Чтобы создать задачу, напиши '+
+      '«Добавь задачу: ...» или нажми «Новая задача».'};
+  }
   if(!env.GROQ_API_KEY)return null;
   const [history,tasks,memory]=await Promise.all([
     env.DB.prepare('SELECT role,content FROM history WHERE chat_id=? ORDER BY id DESC LIMIT 6')
