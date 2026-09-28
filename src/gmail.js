@@ -81,7 +81,8 @@ export function isWorkGmailMessage(message,env) {
     const dkim=part.match(/(?:^|\\s)header\\.d=([^\\s;()]+)/i)?.[1]||'';
     const smtp=part.match(/(?:^|\\s)smtp\\.mailfrom=([^\\s;()]+)/i)?.[1]||'';
     return (part.includes('dkim=pass')&&dkim===domain)||
-      (part.includes('spf=pass')&&smtp===work);
+      (part.includes('spf=pass')&&
+        (smtp===work||smtp===domain||smtp.endsWith('@'+domain)));
   });
   return Boolean(work && domain && sender.includes(work) && authenticated);
 }
