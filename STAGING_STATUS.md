@@ -38,6 +38,14 @@ Existing Google Apps Script bot remains the only live Telegram bot. No existing 
 - Code saved on cloudflare-staging. Cloudflare publication and delivery of an actual forwarded Outlook message have not been established. Current Telegram webhook still belongs to Apps Script.
 - Next: confirm the permitted forwarded message format and corporate AI approval; then implement source-aware task extraction, work inbox and reply preview without enabling corporate sending.
 
+
+## 2026-09-28 - Telegram task menu
+- Primary Telegram menu now opens separate pending tasks (NEW), tasks in progress (IN_PROGRESS), completed tasks (DONE), and news. Existing secondary actions remain under More.
+- Pending mail tasks display the classifier's provisional priority. Taking one into work first asks the owner to select high, medium or low; a guarded D1 update sets both IN_PROGRESS and the selected priority once. Completed items remain browsable.
+- News shows public RSS headlines plus work email items classified as news/FYI only when their saved action says no action is needed. Personal Gmail remains outside work mode.
+- Code commits: 7e4e9b1 and 722aaf1. No tests or live Telegram calls were run. Cloudflare publication and existing Telegram webhook attachment remain unconfirmed and unchanged respectively.
+- Next: align Mini App task tabs with the new lifecycle and continue the Gmail forwarding path once its actual delivered format is available.
+
 ## Pending prerequisites
 1. Check latest CI and current public `/health`. The Cloudflare preview/build being successful does not imply Gmail access.
 2. Core and extra table names are now confirmed on the live D1. Verify each table's indexes and the Wrangler migration ledger before any migration replay. Do not drop tables or reapply migration scripts merely because ledger entries are missing.
