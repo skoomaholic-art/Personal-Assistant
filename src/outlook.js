@@ -175,7 +175,10 @@ export async function graph(env,resource,{method='GET',body=null,params={}}={}){
     body:body===null?undefined:JSON.stringify(body),signal:AbortSignal.timeout(16000)
   });
   if(!response.ok)throw Error('Microsoft Graph '+method+' HTTP '+response.status);
-  if(response.status===204)return {};
+  // Graph sendMail/reply return HTTP 202 Accepted with no JSON body.
+  // A successful 202 means Graph accepted the request, not that the
+  // recipient has received or read the mail.
+  if(response.status===202||response.status===204)return {accepted:true};
   return response.json();
 }
 async function hashedId(id){
