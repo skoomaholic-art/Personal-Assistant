@@ -103,6 +103,7 @@ export async function startGoogleOAuth(request,env) {
 // cookie and a separate encrypted D1 credential. Gmail tokens stay untouched.
 export async function startCalendarOAuth(request,env) {
   if(request.method!=='GET')return out('Method not allowed',405);
+  if(env.ASSISTANT_SCOPE==='work')return out('Personal Google Calendar is disabled in work-only mode',403);
   if(env.GOOGLE_CALENDAR_SETUP_ENABLED!=='true'||
     !env.DB||!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)
     return out('Calendar pairing is disabled',503);
@@ -123,6 +124,7 @@ export async function startCalendarOAuth(request,env) {
   } catch{return out('Calendar OAuth configuration incomplete',503);}
 }
 async function completeCalendarOAuth(request,env) {
+  if(env.ASSISTANT_SCOPE==='work')return out('Personal Google Calendar is disabled in work-only mode',403);
   if(env.GOOGLE_CALENDAR_SETUP_ENABLED!=='true')return out('Calendar pairing disabled',503);
   const url=new URL(request.url);
   const state=url.searchParams.get('state')||'';
