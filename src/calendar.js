@@ -7,6 +7,13 @@ const SHORT=(value,max)=>String(value??'').trim().slice(0,max);
 const tz='Asia/Almaty';
 const stateKey=chatId=>String(chatId);
 const ready=env=>env.GOOGLE_CALENDAR_ENABLED==='true'&&Boolean(env.DB&&env.GOOGLE_CLIENT_ID&&env.GOOGLE_CLIENT_SECRET);
+async function calendarConnected(env){
+  if(!ready(env))return false;
+  const result=await env.DB.prepare(
+    "SELECT provider FROM oauth_credentials WHERE provider='calendar'"
+  ).first();
+  return Boolean(result);
+}
 const promptKeyboard={inline_keyboard:[
   [{text:'✅ Добавить в Google Calendar',callback_data:'cal:confirm'},
    {text:'✏️ Изменить',callback_data:'cal:edit'}],
@@ -140,8 +147,9 @@ export async function confirmCalendar(env,chatId){
   if(target==='work'){
     if(env.OUTLOOK_CALENDAR_WRITE_ENABLED!=='true')
       return {text:'Рабочий Outlook Calendar пока не подключён с разрешения компании. Событие не создано.',reply_markup:backMarkup()};
-  }else if(!ready(env))
-    return {text:'Google Calendar ещё не подключён. Событие не создано. Для подключения нужен отдельный вход Google с разрешением на календарь.',reply_markup:backMarkup()};
+  }else if(!await calendarConnected(env))
+    return {text:'Google Calendar ещё не подключён. Событие не создано. Открой защищённую ссылку подключения календаря.',
+      reply_markup:backMarkup()};
   const row=await env.DB.prepare('SELECT mode,data FROM states WHERE chat_id=?')
     .bind(stateKey(chatId)).first();
   if(row?.mode!=='CALENDAR_DRAFT'&&row?.mode!=='CALENDAR_EDIT')
@@ -186,7 +194,7 @@ export async function confirmCalendar(env,chatId){
   }
 }
 export async function calendarAgenda(env,period='today'){
-  if(!ready(env))return {text:'Личный календарь ещё не подключён. Подключение требует твоего согласия Google.',
+  if(!await calendarConnected(env))return {text:'Личный календарь ещё не подключён. Подключение требует твоего согласия Google.',
     reply_markup:backMarkup()};
   const bounds=localDayBounds(new Date(),Number(env.TZ_OFFSET_MINUTES??300));
   const stop=period==='week'?
