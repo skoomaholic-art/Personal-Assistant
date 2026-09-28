@@ -112,7 +112,7 @@ async function show(tab){
    const decide=async(url,question)=>{
     if(!window.confirm(question))return;
     try{const response=await api(url,'POST');notice.textContent=response.text;
-      await show('news');notice.textContent=response.text;}
+      await show('review');notice.textContent=response.text;}
     catch(error){notice.textContent=error.message;}
    };
    for(const item of data.telegram_review){
@@ -151,7 +151,7 @@ async function show(tab){
     d.map((v,i)=>(i+1)+'. '+v).join('\n')||'Скажи боту «Запомни ...».'));}
   if(['tasks','progress','done'].includes(tab)){
    const wanted={tasks:'NEW',progress:'IN_PROGRESS',done:'DONE'}[tab];
-   const d=(await api('tasks')).filter(task=>task.status===wanted);
+   const d=await api('tasks?status='+wanted);
    box.replaceChildren(el('h2',{tasks:'Задачи (не в работе)',progress:'Задачи (в работе)',done:'Выполненные'}[tab]));
    if(tab==='tasks'){
     const form=el('form'),title=el('input'),description=el('textarea'),due=el('input');
@@ -233,11 +233,15 @@ export async function miniApp(request,env){
   if(!await authorized(request,env))return json({error:'owner_auth_required'},401);
   const section=path.slice('/app/api/'.length);
   if(request.method==='GET'&&section==='tasks'){
+    const status=new URL(request.url).searchParams.get('status');
+    if(!['NEW','IN_PROGRESS','DONE'].includes(status))
+      return json({error:'invalid_status'},400);
     const rows=await env.DB.prepare(
-      "SELECT task_id,title,description,status,priority,due_iso,due_text "+
-      "FROM tasks WHERE status!='DELETED' "+
-      "ORDER BY CASE WHEN status='DONE' THEN 1 ELSE 0 END,due_iso='' ASC,due_iso ASC,created_at DESC LIMIT 100"
-    ).all();return json(rows.results||[]);
+      "SELECT task_id,title,description,status,priority,due_iso,due_text,email_id "+
+      "FROM tasks WHERE status=? "+
+      "ORDER BY CASE priority WHEN 'высокий' THEN 0 WHEN 'средний' THEN 1 ELSE 2 END, "+
+      "CASE WHEN due_iso='' THEN 1 ELSE 0 END,due_iso ASC,created_at DESC LIMIT 100"
+    ).bind(status).all();return json(rows.results||[]);
   }
   if(request.method==='GET'&&section==='mail'){
     const rows=await env.DB.prepare(
