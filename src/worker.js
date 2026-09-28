@@ -258,7 +258,8 @@ async function prepareAnswer(update, env) {
   if (action==='reset:no') return {text:'Отменено.',reply_markup:backMarkup()};
   if (action==='reset:yes') {
     await env.DB.batch([
-      env.DB.prepare('DELETE FROM history WHERE chat_id=?').bind(chatId),
+      env.DB.prepare('DELETE FROM history WHERE chat_id IN (?,?)')
+        .bind(chatId,'work:'+chatId),
       env.DB.prepare('DELETE FROM states WHERE chat_id=?').bind(chatId)
     ]);
     return {text:'✅ Контекст очищен.',reply_markup:backMarkup()};
