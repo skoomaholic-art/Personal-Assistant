@@ -4,6 +4,7 @@
   "account_id": "1ddef0e5e228aa4a8e748b50e1a86bfb",
   "main": "src/worker.js",
   "compatibility_date": "2026-09-27",
+  "keep_vars": true,
   "vars": {
     "GROQ_MODEL": "openai/gpt-oss-20b",
     "WORK_DOMAIN": "fmedia.kz",
@@ -34,7 +35,11 @@
     "OUTLOOK_CALENDAR_WRITE_ENABLED": "false",
     "OUTLOOK_AI_ENABLED": "false",
     "ASSISTANT_SCOPE": "work",
-    "WORK_OUTLOOK_SEND_ENABLED": "false"
+    "WORK_OUTLOOK_SEND_ENABLED": "false",
+    "TELEGRAM_MENTIONS_ENABLED": "true",
+    "TELEGRAM_MENTION_NOTIFICATIONS_ENABLED": "true",
+    "TELEGRAM_MENTIONS_AI_ENABLED": "false",
+    "TELEGRAM_MENTION_WORKER_CALLBACKS_ENABLED": "false"
   },
   "d1_databases": [
     {
