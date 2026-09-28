@@ -87,6 +87,8 @@ async function saveState(env,chatId,mode,data){
   ).bind(stateKey(chatId),mode,JSON.stringify(data),Math.floor(Date.now()/1000)).run();
 }
 export async function proposeCalendar(env,chatId,input){
+  if(env.ASSISTANT_SCOPE==='work'&&input?.calendar_target!=='work')
+    return {text:'Сейчас доступен только рабочий календарь Outlook. Личные встречи пока не создаю.',reply_markup:backMarkup()};
   const draft=calendarDraft(input);
   if(!draft.title||!draft.start_iso||!draft.end_iso)
     return {text:'Уточни название, дату и время начала встречи. Например: «Встреча с Олегом завтра в 15:00 на час».',
@@ -144,6 +146,8 @@ export async function confirmCalendar(env,chatId){
     .bind(stateKey(chatId)).first();
   let target='personal';
   try {target=JSON.parse(existing?.data||'{}')?.calendar_target==='work'?'work':'personal';}catch{}
+  if(env.ASSISTANT_SCOPE==='work'&&target!=='work')
+    return {text:'Личный календарь выключен в рабочем режиме. Ничего не создано.',reply_markup:backMarkup()};
   if(target==='work'){
     if(env.OUTLOOK_CALENDAR_WRITE_ENABLED!=='true')
       return {text:'Рабочий Outlook Calendar пока не подключён с разрешения компании. Событие не создано.',reply_markup:backMarkup()};
@@ -194,6 +198,8 @@ export async function confirmCalendar(env,chatId){
   }
 }
 export async function calendarAgenda(env,period='today'){
+  if(env.ASSISTANT_SCOPE==='work')
+    return {text:'Личный Google Calendar выключен. Для работы используй рабочий Outlook.',reply_markup:backMarkup()};
   if(!await calendarConnected(env))return {text:'Личный календарь ещё не подключён. Подключение требует твоего согласия Google.',
     reply_markup:backMarkup()};
   const bounds=localDayBounds(new Date(),Number(env.TZ_OFFSET_MINUTES??300));
