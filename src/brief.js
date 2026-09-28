@@ -1,4 +1,5 @@
 import {calendarAgenda} from './calendar.js';
+import {outlookAgenda} from './outlook.js';
 import {backMarkup,safeText} from './router.js';
 
 const small=(x,n)=>String(x??'').trim().slice(0,n);
@@ -39,8 +40,14 @@ export async function dailyBriefPreview(env){
   if(env.GOOGLE_CALENDAR_ENABLED==='true'){
     try{
       const agenda=await calendarAgenda(env,'today');
-      calendarText='\n\n'+small(agenda.text,1100);
+      calendarText='\n\n'+small(agenda.text,950);
     }catch{/* Mail and tasks still work without calendar. */}
+  }
+  if(env.OUTLOOK_CALENDAR_READ_ENABLED==='true'){
+    try{
+      const agenda=await outlookAgenda(env,1);
+      calendarText+='\n\n'+small(agenda.text,950);
+    }catch{/* Corporate calendar is optional. */}
   }
   return {text:safeText(data.body+calendarText),reply_markup:backMarkup()};
 }
