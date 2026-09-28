@@ -239,7 +239,7 @@ export async function ingestGmailId(env, id) {
     const token=await gmailAccessToken(env);
     const raw=await gmailMessage(token,id);
     const workMail=isWorkGmailMessage(raw,env);
-    if(!workMail&&env.GMAIL_PERSONAL_INGEST_ENABLED!=='true') {
+    if(!workMail&&(env.ASSISTANT_SCOPE==='work'||env.GMAIL_PERSONAL_INGEST_ENABLED!=='true')) {
       // Before the owner enables personal mail, do not retain its contents.
       await env.DB.prepare(
         "UPDATE emails SET status='IGNORED_NONWORK' "+
@@ -250,7 +250,7 @@ export async function ingestGmailId(env, id) {
     const email=normalizeGmailMessage(raw);
     if(email.email_id!==id) throw new Error('Gmail message ID mismatch');
     const analysis=await analyzeGmailEmail(env,email);
-    const notify=env.WORKER_EMAIL_NOTIFICATIONS==='true' && analysis.category!=='МУСОР';
+    const notify=workMail&&env.WORKER_EMAIL_NOTIFICATIONS==='true' && analysis.category!=='МУСОР';
     const update=env.DB.prepare(
       "UPDATE emails SET received_at=?,from_name=?,from_email=?,subject=?,summary=?,action=?,"+
       "category=?,priority=?,deadline_text=?,deadline_iso=?,has_attachments=?,status=?,notification_status=? "+
@@ -258,7 +258,7 @@ export async function ingestGmailId(env, id) {
     ).bind(email.received_at,email.from_name,email.from_email,email.subject,
       analysis.summary,analysis.action,analysis.category,analysis.priority,
       analysis.deadline_text,analysis.deadline_iso,email.has_attachments?1:0,
-      analysis.needs_review?'NEEDS_REVIEW':workMail?'NEW':'PERSONAL',
+      workMail?(analysis.needs_review?'WORK_REVIEW':'NEW'):'PERSONAL',
       notify?'queued':'disabled',id,claimedAt);
     // Personal mail is summarized and searchable, but a personal email
     // never creates an action item without an explicit owner request.
@@ -327,6 +327,17 @@ export async function pollGmail(env) {
     q='in:inbox after:'+floor+' -in:spam -in:trash';
   }
   if(!q)q='in:inbox newer_than:2d -in:spam -in:trash';
+  if(env.ASSISTANT_SCOPE==='work'){
+    // Scope the Gmail LIST API itself to work headers, rather than fetching
+    // arbitrary personal messages and discarding them after a full download.
+    // Manual forwards from the corporate address match from:@work-domain.
+    const domain=String(env.WORK_DOMAIN||'').trim().toLowerCase().replace(/^@/,'');
+    const mailbox=String(env.WORK_EMAIL||'').trim().toLowerCase();
+    if(!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(domain)||
+       !/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(mailbox))
+      throw new Error('Work mail filter is not configured');
+    q='('+q+') {from:(@'+domain+') to:('+mailbox+')}';
+  }
   let pageToken='', scanned=0, queued=0, page=0;
   while(page<4 && scanned<240 && queued<25) {
     const data=await gmailGet(token,'/messages',{q,maxResults:60,pageToken});
