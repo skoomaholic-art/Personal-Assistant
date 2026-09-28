@@ -93,11 +93,28 @@ export async function connectionStatus(request,env) {
       outlook_connected:found.has('outlook')
     };
   }catch{/* No credentials are exposed in health diagnostics. */}
+  // Report readiness without revealing chat IDs, session keys or message text.
+  let mentions_table=false;
+  try {
+    const present=await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='telegram_mentions'"
+    ).first();
+    mentions_table=Boolean(present);
+  }catch{/* Schema may not have been installed yet. */}
+  const telegram_mentions={
+    enabled:env.TELEGRAM_MENTIONS_ENABLED==='true',
+    database_ready:mentions_table,
+    ingest_secret_configured:Boolean(env.TELEGRAM_MENTION_INGEST_SECRET),
+    group_allowlist_configured:Boolean(String(env.TELEGRAM_MENTION_CHAT_IDS||'').trim()),
+    private_allowlist_configured:Boolean(String(env.TELEGRAM_MENTION_PRIVATE_CHAT_IDS||'').trim()),
+    notifications_enabled:env.TELEGRAM_MENTION_NOTIFICATIONS_ENABLED==='true',
+    callbacks_enabled:env.TELEGRAM_MENTION_WORKER_CALLBACKS_ENABLED==='true'
+  };
   return response({
     ok:Boolean(google.ok&&groq.ok),
     service:'Персональный помощник',phase:'staging',
     assistant_scope:env.ASSISTANT_SCOPE||'unspecified',
-    google,groq,mailbox,
+    google,groq,mailbox,telegram_mentions,
     ...additional,
     personal_mail_ingest_enabled:env.ASSISTANT_SCOPE!=='work'&&
       env.GMAIL_PERSONAL_INGEST_ENABLED==='true',
