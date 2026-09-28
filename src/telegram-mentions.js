@@ -169,14 +169,17 @@ async function notify(env,id){
   if(changed.meta.changes!==1)return;
   const entry=await env.DB.prepare('SELECT * FROM telegram_mentions WHERE id=?').bind(id).first();
   try{
+    // Apps Script still owns callbacks until an authorized handoff.
+    // Send plain text unless Worker callbacks are explicitly enabled.
+    const markup=entry.category==='TASK'?
+      taskMarkup(entry.task_id):{inline_keyboard:[[
+        {text:'💬 Открыть',callback_data:'mention:view:'+id}],
+        [{text:'☰ Меню',callback_data:'menu'}]]};
     const result=await fetch('https://api.telegram.org/bot'+env.TELEGRAM_BOT_TOKEN+'/sendMessage',{
       method:'POST',headers:{'content-type':'application/json'},
       body:JSON.stringify({chat_id:env.TELEGRAM_CHAT_ID,text:details(entry),
         disable_web_page_preview:true,
-        reply_markup:entry.category==='TASK'?
-          taskMarkup(entry.task_id):{inline_keyboard:[[
-            {text:'💬 Открыть',callback_data:'mention:view:'+id}],
-            [{text:'☰ Меню',callback_data:'menu'}]]}}),
+        ...(env.TELEGRAM_MENTION_WORKER_CALLBACKS_ENABLED==='true'?{reply_markup:markup}:{})}),
       signal:AbortSignal.timeout(10000)
     });
     if(!result.ok)throw Error('telegram_http_'+result.status);

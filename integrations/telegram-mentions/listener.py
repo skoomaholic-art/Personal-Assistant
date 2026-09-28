@@ -62,7 +62,7 @@ def relay_post(payload):
 
 def source_link(event, chat):
     # t.me/c links work for signed-in group members, not as public URLs.
-    if getattr(chat, "username", None):
+    if not event.is_private and getattr(chat, "username", None):
         return f"https://t.me/{chat.username}/{event.message.id}"
     chat_id = str(event.chat_id)
     if chat_id.startswith("-100") and chat_id[4:].isdigit():
