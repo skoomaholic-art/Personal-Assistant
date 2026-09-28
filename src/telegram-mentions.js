@@ -81,7 +81,7 @@ async function analyze(env,entry){
     privateChat:entry.signal==='private',workOnly:env.ASSISTANT_SCOPE==='work'
   });
   const simple={
-    category:classified.category==='SKIP'?'REVIEW':classified.category,
+    category:classified.category==='SKIP'?'IGNORED':classified.category,
     title:summary,summary,priority:classified.priority||'средний'
   };
   // Keep uncertain items as owner-review, never use external AI to invent
@@ -125,7 +125,7 @@ function reviewMarkup(id){
   ]};
 }
 export async function reviewTelegramMention(env,callback){
-  const match=/^mention:(task|news|ignore):(-?\\d{1,20}:\\d{1,16})$/.exec(callback);
+  const match=/^mention:(task|news|ignore):(-?\d{1,20}:\d{1,16})$/.exec(callback);
   if(!match)return {text:'Неизвестное действие.',reply_markup:backMarkup()};
   const [,action,id]=match;
   const row=await env.DB.prepare(
@@ -154,7 +154,7 @@ export async function reviewTelegramMention(env,callback){
   const idTask='tgm:'+id;
   const description=cap('Из Telegram. Чат: '+(row.chat_title||row.chat_id)+
     '. Автор: '+(row.sender_name||row.sender_id)+
-    (row.source_link?'. Ссылка: '+row.source_link:'')+'\\n\\n'+row.body,900);
+    (row.source_link?'. Ссылка: '+row.source_link:'')+'\n\n'+row.body,900);
   const instant=new Date().toISOString();
   // One D1 transaction: no orphan task if the source record was changed.
   const [,updated]=await env.DB.batch([
@@ -170,7 +170,7 @@ export async function reviewTelegramMention(env,callback){
     ).bind(idTask,id)
   ]);
   return {text:updated.meta.changes===1?
-    '✅ Добавлено в задачи:\\n'+cap(row.summary||row.body,180):
+    '✅ Добавлено в задачи:\n'+cap(row.summary||row.body,180):
     'Сообщение уже разобрано.',reply_markup:updated.meta.changes===1?
       taskMarkup(idTask,'NEW'):backMarkup()};
 }
@@ -185,7 +185,10 @@ function details(row){
     '\n\nИсточник: '+source+(row.source_link?'\nОткрыть сообщение: '+row.source_link:''));
 }
 export async function telegramMentionDetails(env,id){
-  const row=await env.DB.prepare('SELECT * FROM telegram_mentions WHERE id=? AND status=\'done\'')
+  const row=await env.DB.prepare(
+    "SELECT * FROM telegram_mentions WHERE id=? AND status='done' "+
+    "AND category IN ('TASK','NEWS','REVIEW')"
+  )
     .bind(id).first();
   if(!row)return {text:'Сообщение не найдено.',reply_markup:backMarkup()};
   return {text:details(row),
@@ -220,6 +223,16 @@ export async function processTelegramMention(env,id){
     const row=await env.DB.prepare('SELECT * FROM telegram_mentions WHERE id=?').bind(id).first();
     if(!row)throw Error('mention_missing');
     const result=await analyze(env,row);
+    if(result.category==='IGNORED'){
+      // The source may predate the new private-work gate. Keep only its
+      // stable deduplication ID, not the personal text or source identity.
+      await env.DB.prepare(
+        "UPDATE telegram_mentions SET category='IGNORED',body='',summary='',"+
+        "sender_name='',source_link='',notification_status='disabled',status='done' "+
+        "WHERE id=? AND status='processing'"
+      ).bind(id).run();
+      return 'done';
+    }
     const taskId='tgm:'+row.id;
     const statements=[];
     if(result.category==='TASK'){
