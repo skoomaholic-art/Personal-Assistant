@@ -74,18 +74,15 @@ export function isWorkGmailMessage(message,env) {
   // the exact configured corporate sender is accepted, with Gmail's recorded
   // authentication result aligned to the work domain.
   const auth=String(h['authentication-results']||'');
-  // Match exact identities, not prefix lookalikes such as fmedia.kz.evil.
-  const escapedDomain=domain.replace(/[.*+?^$\x7b\x7d()|[\]\\]/g,'\\  const authenticated=domain && auth.toLowerCase().split(';').some(part =>
-    (part.includes('dkim=pass') && part.includes('header.d='+domain)) ||
-    (part.includes('spf=pass') && part.includes('smtp.mailfrom='+work)));');
-  const escapedWork=work.replace(/[.*+?^$\x7b\x7d()|[\]\\]/g,'\\  const authenticated=domain && auth.toLowerCase().split(';').some(part =>
-    (part.includes('dkim=pass') && part.includes('header.d='+domain)) ||
-    (part.includes('spf=pass') && part.includes('smtp.mailfrom='+work)));');
-  const signed=new RegExp('(?:^|[;\\s])header\\.d='+escapedDomain+'(?=$|[;\\s(])','i');
-  const envelope=new RegExp('(?:^|[;\\s])smtp\\.mailfrom='+escapedWork+'(?=$|[;\\s(])','i');
-  const authenticated=domain&&auth.toLowerCase().split(';').some(part=>
-    (part.includes('dkim=pass')&&signed.test(part))||
-    (part.includes('spf=pass')&&envelope.test(part)));
+  // Accept only exact corporate authentication identities, never a
+  // lookalike prefix such as fmedia.kz.evil. Do not trust the recipient
+  // header or a subject line as proof of corporate provenance.
+  const authenticated=Boolean(domain&&work)&&auth.toLowerCase().split(';').some(part=>{
+    const dkim=part.match(/(?:^|\\s)header\\.d=([^\\s;()]+)/i)?.[1]||'';
+    const smtp=part.match(/(?:^|\\s)smtp\\.mailfrom=([^\\s;()]+)/i)?.[1]||'';
+    return (part.includes('dkim=pass')&&dkim===domain)||
+      (part.includes('spf=pass')&&smtp===work);
+  });
   return Boolean(work && domain && sender.includes(work) && authenticated);
 }
 
