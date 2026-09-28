@@ -15,7 +15,7 @@ import {workOnly,WORK_EMAIL_STATUSES} from './work-mode.js';
 import {relayCallback,relayFollowup,handleRelayJoin,listRelayContacts} from './telegram-relay.js';
 import {memoryCallback,showMemory} from './memory.js';
 import {dailyBriefPreview,runDailyBrief} from './brief.js';
-import {startOutlookOAuth,completeOutlookOAuth,pollOutlook} from './outlook.js';
+import {startOutlookOAuth,completeOutlookOAuth,pollOutlook,outlookAgenda} from './outlook.js';
 import {miniApp} from './miniapp.js';
 import {latestNews} from './news.js';
 import {connectionStatus} from './admin.js';
