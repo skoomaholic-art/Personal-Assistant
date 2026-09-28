@@ -1,5 +1,6 @@
 import {calendarAgenda} from './calendar.js';
 import {outlookAgenda} from './outlook.js';
+import {workOnly,WORK_EMAIL_STATUSES} from './work-mode.js';
 import {backMarkup,safeText} from './router.js';
 
 const small=(x,n)=>String(x??'').trim().slice(0,n);
@@ -13,8 +14,10 @@ async function collect(env,now=Date.now()){
     ).all(),
     env.DB.prepare(
       "SELECT subject,from_name,category,priority FROM emails "+
-      "WHERE received_at>=? AND status NOT IN ('ANALYZING','IGNORED_NONWORK') "+
-      "ORDER BY received_at DESC LIMIT 12"
+      "WHERE received_at>=? AND "+
+      (workOnly(env)?'status IN '+WORK_EMAIL_STATUSES:
+        "status NOT IN ('ANALYZING','IGNORED_NONWORK')")+
+      " ORDER BY received_at DESC LIMIT 12"
     ).bind(new Date(now-24*3600000).toISOString()).all()
   ]);
   const taskLines=(tasks.results||[]).slice(0,8).map(x=>{
@@ -28,7 +31,7 @@ async function collect(env,now=Date.now()){
     ' ('+small(e.category,24)+')');
   return {
     taskCount:(tasks.results||[]).length,emailCount:(messages.results||[]).length,
-    body:'☀️ Доброе утро! Краткая сводка.\n\n'+
+    body:'☀️ Доброе утро! '+(workOnly(env)?'Рабочая сводка.':'Краткая сводка.')+'\n\n'+
       '📋 Активные задачи:\n'+(taskLines.join('\n')||'Пока нет.')+
       '\n\n📨 Новые письма за сутки:\n'+(emails.join('\n')||'Новых нет.')+
       '\n\nНапиши «Покажи задачи» или «Что важно?», чтобы разобрать подробнее.'
