@@ -74,16 +74,20 @@ async def run(args):
     api_id, api_hash, session = config()
     os.umask(0o077)
     ids = {x.strip() for x in os.environ.get("TG_MENTION_CHAT_IDS", "").split(",") if x.strip()}
-    if not args.list_chats and not ids:
-        raise SystemExit("Set TG_MENTION_CHAT_IDS to comma-separated work chat IDs, or * for all accessible chats")
+    private_ids = {x.strip() for x in os.environ.get("TG_MENTION_PRIVATE_CHAT_IDS", "").split(",") if x.strip()}
+    if not args.list_chats and not ids and not private_ids:
+        raise SystemExit("Set TG_MENTION_CHAT_IDS and/or TG_MENTION_PRIVATE_CHAT_IDS")
+    if "*" in private_ids or any(not x.isdigit() or int(x) < 1 for x in private_ids):
+        raise SystemExit("TG_MENTION_PRIVATE_CHAT_IDS must contain only numeric Telegram User IDs")
     if not args.list_chats and "*" not in ids and any(not CHAT_ID.fullmatch(x) for x in ids):
         raise SystemExit("Invalid TG_MENTION_CHAT_IDS")
-    client = TelegramClient(session, api_id, api_hash)
+    client = TelegramClient(session, api_id, api_hash, auto_reconnect=True, connection_retries=None, retry_delay=5)
     async with client:
         owner = await client.get_me()
         if args.list_chats:
             async for dialog in client.iter_dialogs():
-                print(f"{dialog.id}\t{dialog.name}")
+                kind = "private" if dialog.is_user else "group" if dialog.is_group else "channel"
+                print(f"{dialog.id}\t{kind}\t{dialog.name}")
             return
         if not owner or not owner.id:
             raise SystemExit("Telegram account was not authorized")
@@ -92,25 +96,30 @@ async def run(args):
 
         @client.on(events.NewMessage(incoming=True))
         async def on_message(event):
-            if "*" not in ids and str(event.chat_id) not in ids:
+            private = bool(event.is_private)
+            if private:
+                if str(event.chat_id) not in private_ids:
+                    return
+            elif "*" not in ids and str(event.chat_id) not in ids:
                 return
             msg = event.message
             sender = await event.get_sender()
-            if getattr(sender, "id", None) == owner.id:
+            if getattr(sender, "id", None) == owner.id or getattr(sender, "bot", False) or not sender:
+                return
+            if private and (not getattr(sender, "id", None) or str(sender.id) != str(event.chat_id)):
                 return
             text = str(msg.raw_text or "").strip()
-            if not text and not msg.media:
-                return  # Do not download media or upload attachments.
-            direct = bool(USER_REF.search(text) or getattr(msg, "mentioned", False))
-            signal = "mention"
-            if not direct and msg.reply_to_msg_id:
+            if not text:
+                return  # No content to classify; do not download media.
+            direct = private or bool(USER_REF.search(text) or getattr(msg, "mentioned", False))
+            signal = "private" if private else "mention"
+            if not private and not direct and msg.reply_to_msg_id:
                 # Check actual parent author; do not treat every threaded reply as ours.
                 original = await msg.get_reply_message()
                 direct = bool(original and original.sender_id == owner.id)
                 signal = "reply"
             if not direct:
                 return
-            text = text or '[Медиа без подписи]'
             chat = await event.get_chat()
             date = msg.date.astimezone(timezone.utc).isoformat() if msg.date else ""
             sender_name = " ".join(x for x in (
@@ -122,11 +131,20 @@ async def run(args):
                 "chat_title": getattr(chat, "title", "") or getattr(chat, "username", "") or "Личные сообщения",
                 "sender_name": sender_name, "text": text[:5000], "signal": signal,
                 "date": date, "link": source_link(event, chat),
+                "source_type": "private" if private else "group",
+                "media_kind": "document" if msg.document else "photo" if msg.photo else "",
             }
             async with sem:
                 await asyncio.to_thread(relay_post, payload)
 
-        await client.run_until_disconnected()
+        while True:
+            try:
+                await client.run_until_disconnected()
+            except (OSError, asyncio.TimeoutError) as error:
+                LOG.warning("Connection interrupted (%s); reconnecting", type(error).__name__)
+            await asyncio.sleep(5)
+            if not client.is_connected():
+                await client.connect()
 
 
 if __name__ == "__main__":
