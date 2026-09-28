@@ -281,10 +281,11 @@ async function prepareAnswer(update, env) {
     const domain=String(env.WORK_DOMAIN || 'fmedia.kz').toLowerCase();
     return fromRows('👥 Коллеги',await listEmails(env,'lower(from_email) LIKE ?',['%@'+domain]),'email');
   }
-  if (action==='today' || action==='week') {
+  if(action==='today')return dailyBriefPreview(env);
+  if (action==='week') {
     const tasks=await getTasks(env);
     const bounds=localDayBounds(new Date(),env.TZ_OFFSET_MINUTES ?? 300);
-    const end=action==='today' ? bounds.end : new Date(bounds.end.getTime()+6*86400000);
+    const end=new Date(bounds.end.getTime()+6*86400000);
     const filtered=tasks.filter(t=>{
       if (!t.due_iso) {
         if (action==='week') return true;
@@ -294,7 +295,7 @@ async function prepareAnswer(update, env) {
       const due=Date.parse(t.due_iso);
       return Number.isFinite(due) && due<end.getTime();
     });
-    return fromRows(action==='today'?'✅ Сегодня':'📅 Неделя',filtered,'task');
+    return fromRows('📅 Неделя',filtered,'task');
   }
   if (action==='search') {
     await setState(env,chatId,'SEARCH');
