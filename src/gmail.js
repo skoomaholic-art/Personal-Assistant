@@ -69,8 +69,14 @@ export function isWorkGmailMessage(message,env) {
   const work=String(env.WORK_EMAIL||'').trim().toLowerCase();
   const sender=addresses(h.from);
   const recipients=addresses([h.to,h.cc,h['x-original-to']].join(','));
-  if (work && recipients.includes(work)) return true;
-  return Boolean(domain) && sender.some(a=>a.endsWith('@'+domain));
+  // A recipient header alone is user-controlled. For a forwarded copy, only
+  // the exact configured corporate sender is accepted, with Gmail's recorded
+  // authentication result aligned to the work domain.
+  const auth=String(h['authentication-results']||'');
+  const authenticated=domain && auth.toLowerCase().split(';').some(part =>
+    (part.includes('dkim=pass') && part.includes('header.d='+domain)) ||
+    (part.includes('spf=pass') && part.includes('smtp.mailfrom='+work)));
+  return Boolean(work && domain && sender.includes(work) && authenticated);
 }
 
 function decodeBase64Url(data) {
@@ -101,10 +107,17 @@ export function normalizeGmailMessage(message) {
   // Gmail may omit text/plain on HTML-only messages; use the short snippet.
   const body=cut(collected.body || message?.snippet || '',5000)
     .replace(/\r\n?/g,'\n').replace(/\n{4,}/g,'\n\n').trim();
+  // Outlook forwarding may preserve the original headers in the body.
+  // Never infer the original author from the technical Gmail sender.
+  const headerBlock=body.slice(0,1600);
+  const originalFrom=/^(?:From|От):\s*(.+)$/im.exec(headerBlock)?.[1]||'';
+  const originalTo=/^(?:To|Кому):\s*(.+)$/im.exec(headerBlock)?.[1]||'';
+  const forwarded=Boolean(originalFrom && originalTo);
   return {
+    forwarded, original_to:cut(originalTo,350),
     email_id:cut(message?.id,160), thread_id:cut(message?.threadId,160),
-    received_at:at.toISOString(), from_name:cut(h.from,250),
-    from_email:addresses(h.from)[0] || '', to_line:cut(h.to,350),
+    received_at:at.toISOString(), from_name:cut(forwarded?originalFrom:h.from,250),
+    from_email:addresses(forwarded?originalFrom:h.from)[0] || '', to_line:cut(forwarded?originalTo:h.to,350),
     subject:cut(h.subject || 'Без темы',500), body,
     has_attachments:manifest.length>0,
     attachment_names:manifest.map(file=>file.name),
@@ -156,9 +169,9 @@ export function gmailAttachmentManifest(message) {
 }
 
 export async function analyzeGmailEmail(env,email) {
-  if (!env.GROQ_API_KEY) return {
-    category:'ПИСЬМО',priority:'средний',summary:cut(email.body || 'Текст письма отсутствует',500),
-    action:'AI-анализ не выполнен',deadline_text:'Не указан',deadline_iso:'',needs_review:true
+  if (!env.GROQ_API_KEY || (env.ASSISTANT_SCOPE==='work' && env.OUTLOOK_AI_ENABLED!=='true')) return {
+    category:'ПИСЬМО',priority:'средний',summary:cut(email.subject+' - '+(email.body || 'Текст письма отсутствует'),500),
+    action:'Нужен просмотр владельца; автоматическая задача не создаётся',deadline_text:'Не указан',deadline_iso:'',needs_review:true
   };
   const prompt='Ты Персональный помощник, персональный рабочий помощник Александра. Анализируй рабочие письма. '+
     'Ответ строго JSON c ключами category,priority,summary,action,deadline_text,deadline_iso. '+
@@ -249,7 +262,17 @@ export async function ingestGmailId(env, id) {
     }
     const email=normalizeGmailMessage(raw);
     if(email.email_id!==id) throw new Error('Gmail message ID mismatch');
-    const analysis=await analyzeGmailEmail(env,email);
+    // If forwarding stripped the original sender, retain the copy for review
+    // without sending its content to Groq or attributing a task to anyone.
+    const originalKnown=email.forwarded &&
+      addresses(email.original_to).includes(String(env.WORK_EMAIL||'').toLowerCase()) &&
+      Boolean(email.from_email);
+    const analysis=workMail && !originalKnown
+      ? {category:'ПИСЬМО',priority:'средний',
+          summary:'Рабочая пересылка: '+cut(email.subject,350)+'. Исходный отправитель не подтверждён.',
+          action:'Проверить исходное письмо вручную',deadline_text:'Не указан',
+          deadline_iso:'',needs_review:true}
+      : await analyzeGmailEmail(env,email);
     const notify=workMail&&env.WORKER_EMAIL_NOTIFICATIONS==='true' && analysis.category!=='МУСОР';
     const update=env.DB.prepare(
       "UPDATE emails SET received_at=?,from_name=?,from_email=?,subject=?,summary=?,action=?,"+
@@ -262,7 +285,7 @@ export async function ingestGmailId(env, id) {
       notify?'queued':'disabled',id,claimedAt);
     // Personal mail is summarized and searchable, but a personal email
     // never creates an action item without an explicit owner request.
-    const createTask=workMail && analysis.category!=='МУСОР' &&
+    const createTask=workMail && originalKnown && analysis.category!=='МУСОР' &&
       !analysis.needs_review && analysis.action && analysis.action!=='Действий не требуется';
     const statements=[update];
     if(createTask) {
