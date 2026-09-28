@@ -21,6 +21,7 @@ import {miniApp} from './miniapp.js';
 import {latestNews} from './news.js';
 import {ingestTelegramMention,processTelegramMention,telegramMentionDetails,latestTelegramMentions,reviewTelegramMention} from './telegram-mentions.js';
 import {connectionStatus} from './admin.js';
+import {importLegacyTasks} from './legacy-import.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
 
@@ -683,6 +684,7 @@ export default {
   async fetch(request,env) {
     const path=new URL(request.url).pathname;
     if(path==='/admin/connections') return connectionStatus(request,env);
+    if(path==='/admin/import/tasks') return importLegacyTasks(request,env);
     if(path==='/app'||path.startsWith('/app/api/'))return miniApp(request,env);
     if(path==='/oauth/outlook/start')return startOutlookOAuth(request,env);
     if(path==='/oauth/outlook/callback')return completeOutlookOAuth(request,env);
