@@ -12,6 +12,7 @@ import {calendarAgenda,calendarCallback} from './calendar.js';
 import {mailCallback,mailFollowup,draftPersonalReply} from './personal-mail.js';
 import {workMailCallback,workMailFollowup,draftWorkReply} from './work-mail.js';
 import {workOnly,WORK_EMAIL_STATUSES} from './work-mode.js';
+import {createTaskFromWorkEmail,categorizeReviewedWorkEmail} from './work-inbox.js';
 import {relayCallback,relayFollowup,handleRelayJoin,listRelayContacts} from './telegram-relay.js';
 import {memoryCallback,showMemory} from './memory.js';
 import {dailyBriefPreview,runDailyBrief} from './brief.js';
@@ -408,21 +409,24 @@ async function prepareAnswer(update, env) {
     const e=await env.DB.prepare('SELECT '+emailFields+' FROM emails WHERE email_id=?'+
       (workOnly(env)?' AND status IN '+WORK_EMAIL_STATUSES:'')).bind(id).first();
     if (!e) return {text:'Письмо не найдено.',reply_markup:backMarkup()};
-    return {text:safeText('📨 Письмо\n\nОт: '+e.from_name+'\nТема: '+e.subject+'\n\n'+e.summary+'\n\nЧто требуется: '+e.action+'\nДедлайн: '+(e.deadline_text||'Не указан')),reply_markup:emailMarkup(e.email_id)};
+    const preview={text:safeText('📨 Письмо\n\nОт: '+e.from_name+
+      '\nТема: '+e.subject+'\n\n'+e.summary+
+      '\n\nЧто требуется: '+e.action+
+      '\nДедлайн: '+(e.deadline_text||'Не указан'))};
+    return {...preview,reply_markup:e.status==='WORK_REVIEW'?
+      {inline_keyboard:[
+        [{text:'✅ В задачи',callback_data:'email:task:'+id},
+         {text:'📰 В новости',callback_data:'email:news:'+id}],
+        [{text:'🗑 Не рабочее',callback_data:'email:ignore:'+id},
+         {text:'☰ Меню',callback_data:'menu'}]
+      ]}:emailMarkup(e.email_id)};
   }
-  if (callback?.startsWith('email:task:')) {
-    const id=callback.slice('email:task:'.length);
-    const e=await env.DB.prepare('SELECT '+emailFields+' FROM emails WHERE email_id=?'+
-      (workOnly(env)?' AND status IN '+WORK_EMAIL_STATUSES:'')).bind(id).first();
-    if (!e) return {text:'Письмо не найдено.',reply_markup:backMarkup()};
-    const existing=await env.DB.prepare('SELECT task_id,title FROM tasks WHERE email_id=?').bind(id).first();
-    if (existing) return {text:'Задача уже сохранена:\n'+existing.title,reply_markup:taskMarkup(existing.task_id)};
-    const taskId=crypto.randomUUID();
-    await env.DB.prepare('INSERT OR IGNORE INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
-      .bind(taskId,id,val(e.action||e.subject,180),val(e.summary,1000),'NEW',e.priority,'',e.deadline_text||'',new Date().toISOString(),new Date().toISOString()).run();
-    const t=await env.DB.prepare('SELECT task_id,title FROM tasks WHERE email_id=?').bind(id).first();
-    return {text:'✅ Задача сохранена:\n'+t.title,reply_markup:taskMarkup(t.task_id)};
-  }
+  if(callback?.startsWith('email:task:'))
+    return createTaskFromWorkEmail(env,callback.slice('email:task:'.length));
+  if(callback?.startsWith('email:news:'))
+    return categorizeReviewedWorkEmail(env,callback.slice('email:news:'.length),'news');
+  if(callback?.startsWith('email:ignore:'))
+    return categorizeReviewedWorkEmail(env,callback.slice('email:ignore:'.length),'ignore');
   if(callback?.startsWith('cal:'))return calendarCallback(env,chatId,callback);
   if(callback?.startsWith('workmail:'))return workMailCallback(env,chatId,callback);
   if(callback?.startsWith('mail:'))return mailCallback(env,chatId,callback);
