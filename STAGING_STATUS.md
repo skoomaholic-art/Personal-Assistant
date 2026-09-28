@@ -30,6 +30,14 @@ Existing Google Apps Script bot remains the only live Telegram bot. No existing 
 - `OUTLOOK_SETUP_ENABLED=false`, `OUTLOOK_POLL_ENABLED=false`, `OUTLOOK_CALENDAR_READ_ENABLED=false`, `OUTLOOK_CALENDAR_WRITE_ENABLED=false`, `OUTLOOK_AI_ENABLED=false`, `REMINDERS_ENABLED=false`, `DAILY_BRIEF_ENABLED=false`, `WORKER_EMAIL_NOTIFICATIONS=false`, `GMAIL_SEND_ENABLED=false`, `GMAIL_DRAFTS_ENABLED=false`. No production Telegram handoff.
 - User requested proceeding directly without manual test cycles. Changes after this request are code commits only; do not describe new email, calendar, relay, Mini App or actual Telegram features as live-proven.
 
+
+## 2026-09-28 - Gmail work-only provenance gate
+- Commit 1bd459e: Gmail work ingestion now requires the exact configured corporate sender and an aligned Gmail authentication result. Recipient address alone no longer classifies a message as work.
+- A forwarded copy with explicit original From/To headers addressed to WORK_EMAIL can be attributed to its original author. Copies without those headers are stored as WORK_REVIEW with a subject-only summary and create no task or Groq request.
+- In ASSISTANT_SCOPE=work, Groq analysis of forwarded corporate mail requires OUTLOOK_AI_ENABLED=true. Without approved external AI processing the copy remains review-only, with no automatic task. Gmail message IDs and task IDs continue to suppress duplicates. Existing Telegram notification gate remains off.
+- Code saved on cloudflare-staging. Cloudflare publication and delivery of an actual forwarded Outlook message have not been established. Current Telegram webhook still belongs to Apps Script.
+- Next: confirm the permitted forwarded message format and corporate AI approval; then implement source-aware task extraction, work inbox and reply preview without enabling corporate sending.
+
 ## Pending prerequisites
 1. Check latest CI and current public `/health`. The Cloudflare preview/build being successful does not imply Gmail access.
 2. Core and extra table names are now confirmed on the live D1. Verify each table's indexes and the Wrangler migration ledger before any migration replay. Do not drop tables or reapply migration scripts merely because ledger entries are missing.
