@@ -10,6 +10,8 @@ import {prepareGmailDraft, gmailSendPreview, confirmGmailSend} from './gmail-com
 import {startGoogleOAuth,completeGoogleOAuth,startCalendarOAuth} from './google-oauth.js';
 import {calendarAgenda,calendarCallback} from './calendar.js';
 import {mailCallback,mailFollowup,draftPersonalReply} from './personal-mail.js';
+import {workMailCallback,workMailFollowup,draftWorkReply} from './work-mail.js';
+import {workOnly,WORK_EMAIL_STATUSES} from './work-mode.js';
 import {relayCallback,relayFollowup,handleRelayJoin,listRelayContacts} from './telegram-relay.js';
 import {memoryCallback,showMemory} from './memory.js';
 import {dailyBriefPreview,runDailyBrief} from './brief.js';
@@ -221,9 +223,11 @@ function fromRows(title, rows, kind) {
   buttons.push([{text:'☰ Меню',callback_data:'menu'}]);
   return {text:safeText(lines.join('\n')),reply_markup:{inline_keyboard:buttons}};
 }
-const emailFields = 'email_id,from_name,from_email,subject,summary,action,category,priority,deadline_text,has_attachments,received_at';
+const emailFields = 'email_id,from_name,from_email,subject,summary,action,category,priority,deadline_text,has_attachments,received_at,status';
 async function listEmails(env,where,bind=[]) {
-  const query='SELECT '+emailFields+' FROM emails WHERE '+where+' ORDER BY received_at DESC LIMIT 8';
+  const query='SELECT '+emailFields+' FROM emails WHERE ('+where+')'+
+    (workOnly(env)?' AND status IN '+WORK_EMAIL_STATUSES:'')+
+    ' ORDER BY received_at DESC LIMIT 8';
   const res=await env.DB.prepare(query).bind(...bind).all();
   return res.results;
 }
@@ -266,13 +270,16 @@ async function prepareAnswer(update, env) {
       reply_markup:{inline_keyboard:[[
         {text:'Открыть панель',web_app:{url:String(env.MINIAPP_URL||new URL('/app','https://rahal-mamut-staging.alexandr-petrossov.workers.dev').href)}}
       ],[{text:'☰ Меню',callback_data:'menu'}]]}};
-  if(action==='calendar')return calendarAgenda(env,'today');
+  if(action==='calendar')return workOnly(env)?outlookAgenda(env,1):calendarAgenda(env,'today');
   if(action==='compose'){
-    await setState(env,chatId,'PERSONAL_MAIL_INPUT','{}');
-    return {text:'✉️ Кому написать? Укажи email, тему и что нужно передать. Сначала покажу полный черновик, ничего без подтверждения не отправлю.',
+    await setState(env,chatId,workOnly(env)?'WORK_MAIL_INPUT':'PERSONAL_MAIL_INPUT','{}');
+    return {text:'✉️ Кому написать с рабочего Outlook? Укажи точный email, тему и текст. Сначала покажу черновик, отправка только после подтверждения.',
       reply_markup:backMarkup()};
   }
-  if(action==='contacts')return listRelayContacts(env);
+  if(action==='contacts')
+    return env.TELEGRAM_RELAY_ENABLED==='true'?listRelayContacts(env):
+      {text:'Контакты для отправки от имени бота пока не подключены. Сейчас работаем с корпоративным Outlook.',
+        reply_markup:backMarkup()};
   if(action==='memory')return showMemory(env,chatId);
   if(action==='brief')return dailyBriefPreview(env);
   if (action==='mail') {
@@ -322,13 +329,15 @@ async function prepareAnswer(update, env) {
   }
   if (callback?.startsWith('email:view:')) {
     const id=callback.slice('email:view:'.length);
-    const e=await env.DB.prepare('SELECT '+emailFields+' FROM emails WHERE email_id=?').bind(id).first();
+    const e=await env.DB.prepare('SELECT '+emailFields+' FROM emails WHERE email_id=?'+
+      (workOnly(env)?' AND status IN '+WORK_EMAIL_STATUSES:'')).bind(id).first();
     if (!e) return {text:'Письмо не найдено.',reply_markup:backMarkup()};
     return {text:safeText('📨 Письмо\n\nОт: '+e.from_name+'\nТема: '+e.subject+'\n\n'+e.summary+'\n\nЧто требуется: '+e.action+'\nДедлайн: '+(e.deadline_text||'Не указан')),reply_markup:emailMarkup(e.email_id)};
   }
   if (callback?.startsWith('email:task:')) {
     const id=callback.slice('email:task:'.length);
-    const e=await env.DB.prepare('SELECT '+emailFields+' FROM emails WHERE email_id=?').bind(id).first();
+    const e=await env.DB.prepare('SELECT '+emailFields+' FROM emails WHERE email_id=?'+
+      (workOnly(env)?' AND status IN '+WORK_EMAIL_STATUSES:'')).bind(id).first();
     if (!e) return {text:'Письмо не найдено.',reply_markup:backMarkup()};
     const existing=await env.DB.prepare('SELECT task_id,title FROM tasks WHERE email_id=?').bind(id).first();
     if (existing) return {text:'Задача уже сохранена:\n'+existing.title,reply_markup:taskMarkup(existing.task_id)};
@@ -339,8 +348,11 @@ async function prepareAnswer(update, env) {
     return {text:'✅ Задача сохранена:\n'+t.title,reply_markup:taskMarkup(t.task_id)};
   }
   if(callback?.startsWith('cal:'))return calendarCallback(env,chatId,callback);
+  if(callback?.startsWith('workmail:'))return workMailCallback(env,chatId,callback);
   if(callback?.startsWith('mail:'))return mailCallback(env,chatId,callback);
-  if(callback?.startsWith('relay:'))return relayCallback(env,chatId,callback);
+  if(callback?.startsWith('relay:'))return env.TELEGRAM_RELAY_ENABLED==='true'?
+    relayCallback(env,chatId,callback):
+    {text:'Рабочая отправка в Telegram пока не включена.',reply_markup:backMarkup()};
   if(callback?.startsWith('memory:'))return memoryCallback(env,chatId,callback);
   if(callback && (callback==='task:new:save'||callback==='task:new:change'||
      callback==='task:new:cancel'||callback==='task:action:yes'||
@@ -361,6 +373,19 @@ async function prepareAnswer(update, env) {
       'Задача уже закрыта или удалена.',reply_markup:backMarkup()};
   }
   if (callback?.startsWith('email:reply:')) {
+    if(workOnly(env)){
+      const id=callback.slice('email:reply:'.length);
+      const mail=await env.DB.prepare(
+        "SELECT subject,status FROM emails WHERE email_id=? AND status IN "+WORK_EMAIL_STATUSES
+      ).bind(id).first();
+      if(!mail)return {text:'Это письмо недоступно в рабочем режиме.',reply_markup:backMarkup()};
+      if(mail.status!=='WORK_OUTLOOK')
+        return {text:'Это копия письма, пересланная в Gmail. Чтобы ответить именно с рабочего адреса, нужен согласованный доступ к Outlook. Личный Gmail не использую.',
+          reply_markup:backMarkup()};
+      await setState(env,chatId,'WORK_REPLY_INSTRUCTION',id);
+      return {text:'✉️ Что ответить на рабочее письмо «'+safeText(mail.subject,180)+'»? Покажу черновик. Отправка только с разрешённого Outlook.',
+        reply_markup:backMarkup()};
+    }
     if(env.PERSONAL_GMAIL_SEND_ENABLED==='true'){
       const id=callback.slice('email:reply:'.length);
       const mail=await env.DB.prepare(
@@ -384,6 +409,7 @@ async function prepareAnswer(update, env) {
     return {text:'Что ответить на письмо «'+safeText(email.subject,180)+'»? Напиши своими словами. Я подготовлю локальный черновик. /cancel - отмена.',reply_markup:backMarkup()};
   }
   if (callback?.startsWith('preparegmail:')) {
+    if(workOnly(env))return {text:'Отправка из личного Gmail в рабочем режиме отключена.',reply_markup:backMarkup()};
     if (env.GMAIL_DRAFTS_ENABLED!=='true'||env.REPLY_PREVIEWS_ENABLED!=='true')
       return {text:'Создание Gmail-черновиков пока выключено.',reply_markup:backMarkup()};
     const id=callback.slice('preparegmail:'.length);
@@ -406,6 +432,7 @@ async function prepareAnswer(update, env) {
     return {text:cancelled?'Черновик отменён. Письмо не отправлено. Если Gmail-черновик был создан, он остаётся в папке «Черновики» для ручного удаления.':'Черновик уже отправлен, обрабатывается, отменён или не найден.',reply_markup:backMarkup()};
   }
   if (callback?.startsWith('senddraft:')) {
+    if(workOnly(env))return {text:'Отправка из личного Gmail в рабочем режиме отключена.',reply_markup:backMarkup()};
     // A one-time preview token is required even after the global send flag
     // has been enabled. No other Telegram text can trigger outbound Gmail.
     const parts=callback.split(':');
@@ -424,6 +451,10 @@ async function prepareAnswer(update, env) {
   }
   if (!text) return {text:'Пришли текстовое или голосовое сообщение.',reply_markup:backMarkup()};
   const state=await env.DB.prepare('SELECT mode,data FROM states WHERE chat_id=?').bind(chatId).first();
+  if(['WORK_MAIL_DRAFT','WORK_MAIL_EDIT'].includes(state?.mode)){
+    const result=await workMailFollowup(env,chatId,text);
+    if(result)return result;
+  }
   if(['PERSONAL_MAIL_DRAFT','PERSONAL_MAIL_EDIT'].includes(state?.mode)){
     const result=await mailFollowup(env,chatId,text);
     if(result)return result;
@@ -431,6 +462,9 @@ async function prepareAnswer(update, env) {
   if(['RELAY_DRAFT','RELAY_EDIT'].includes(state?.mode)){
     const result=await relayFollowup(env,chatId,text);
     if(result)return result;
+  }
+  if(state?.mode==='WORK_REPLY_INSTRUCTION'){
+    return draftWorkReply(env,chatId,state.data,text);
   }
   if(state?.mode==='PERSONAL_REPLY_INSTRUCTION'){
     const draft=await draftPersonalReply(env,chatId,state.data,text);
@@ -444,12 +478,14 @@ async function prepareAnswer(update, env) {
     const term='%'+text.slice(0,80).toLowerCase()+'%';
     return fromRows('🔎 '+safeText(text,80),await listEmails(env,'lower(subject) LIKE ? OR lower(summary) LIKE ? OR lower(from_name) LIKE ?',[term,term,term]),'email');
   }
-  if (state?.mode==='REPLY_INSTRUCTION' && env.REPLY_PREVIEWS_ENABLED==='true') {
+  if (state?.mode==='REPLY_INSTRUCTION' && !workOnly(env) &&
+    env.REPLY_PREVIEWS_ENABLED==='true') {
     const draft=await createDraftPreview(env,state.data,text);
     await clearState(env,chatId);
     return draftPreview(draft,env);
   }
-  if (state?.mode==='DRAFT_EDIT' && env.REPLY_PREVIEWS_ENABLED==='true') {
+  if (state?.mode==='DRAFT_EDIT' && !workOnly(env) &&
+    env.REPLY_PREVIEWS_ENABLED==='true') {
     const draft=await editDraftPreview(env,state.data,text);
     await clearState(env,chatId);
     return draftPreview(draft,env);
