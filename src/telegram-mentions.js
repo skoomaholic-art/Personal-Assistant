@@ -9,6 +9,9 @@ const allowed=(value,ids)=>{
   return list.includes('*')||list.includes(value);
 };
 const ID=/^-?\d{1,20}$/;
+const USER_ID=/^[1-9]\d{0,19}$/;
+const privateAllowed=(chatId,senderId,ids)=>USER_ID.test(chatId)&&senderId===chatId&&
+  String(ids||'').split(',').some(x=>x.trim()===chatId);
 const LINK=/^https:\/\/t\.me\/(?:c\/\d+\/\d+|[a-zA-Z0-9_]{5,32}\/\d+)(?:\?[^\s]{0,80})?$/;
 const taskWords=/(?:^|[\s,.:;!?])(?:подготовь|сделай|создай|проверь|пришли|отправь|добавь|обнови|исправь|закажи|запланируй|найди|нужно\s+(?:сделать|подготовить|обновить|отправить|проверить)|прошу\s+(?:сделать|подготовить|прислать|отправить)|өтінем|дайында|жібер|жаса|тексер|please\s+(?:send|prepare|check|update|make)|could\s+you\s+(?:send|prepare|check|update))(?=$|[\s,.:;!?])/iu;
 const urgent=/(?:срочно|сегодня|немедленно|asap|urgent|шұғыл|бүгін)/iu;
@@ -21,7 +24,7 @@ export async function ingestTelegramMention(request,env){
   if(!env.TELEGRAM_MENTION_INGEST_SECRET||
     !hasValidSecret(request.headers.get('X-Telegram-Mention-Secret'),env.TELEGRAM_MENTION_INGEST_SECRET))
     return json({error:'unauthorized'},401);
-  if(!env.DB||!env.JOBS||!String(env.TELEGRAM_MENTION_CHAT_IDS||'').trim())
+  if(!env.DB||!env.JOBS||!(String(env.TELEGRAM_MENTION_CHAT_IDS||'').trim()||String(env.TELEGRAM_MENTION_PRIVATE_CHAT_IDS||'').trim()))
     return json({error:'unconfigured'},503);
   let data;
   try{
@@ -31,19 +34,26 @@ export async function ingestTelegramMention(request,env){
   }catch{return json({error:'bad_json'},400);}
   if(!data||!ID.test(String(data.chat_id))||
     !Number.isSafeInteger(data.message_id)||data.message_id<1||
-    !['mention','reply'].includes(data.signal)||
+    !['mention','reply','private'].includes(data.signal)||
     typeof data.text!=='string'||!data.text.trim()||
     data.text.length>5000)return json({error:'invalid_mention'},400);
   const chatId=String(data.chat_id);
-  if(!allowed(chatId,env.TELEGRAM_MENTION_CHAT_IDS))
+  const isPrivate=data.source_type==='private'||data.signal==='private';
+  if(isPrivate){
+    if(data.source_type!=='private'||data.signal!=='private'||
+      !privateAllowed(chatId,String(data.sender_id||''),env.TELEGRAM_MENTION_PRIVATE_CHAT_IDS))
+      return json({error:'private_chat_not_allowed'},403);
+  }else if(data.source_type==='private'||!allowed(chatId,env.TELEGRAM_MENTION_CHAT_IDS))
     return json({error:'chat_not_allowed'},403);
   const id=chatId+':'+data.message_id;
-  const link=LINK.test(String(data.link||''))?String(data.link):'';
+  const link=!isPrivate&&LINK.test(String(data.link||''))?String(data.link):'';
+  const mediaKind=['photo','document'].includes(data.media_kind)?data.media_kind:'';
   const inserted=await env.DB.prepare(
     "INSERT OR IGNORE INTO telegram_mentions (id,chat_id,message_id,sender_id,chat_title,sender_name,body,source_link,signal,created_at) "+
     "VALUES (?,?,?,?,?,?,?,?,?,?)"
   ).bind(id,chatId,data.message_id,cap(data.sender_id,30),
-    username(data.chat_title),username(data.sender_name),cap(data.text,5000),
+    isPrivate?'Личная переписка':username(data.chat_title),username(data.sender_name),
+    cap(data.text,4900)+(mediaKind?'\n[Вложение: '+(mediaKind==='photo'?'изображение':'документ')+']':''),
     link,data.signal,cap(data.date,40)||new Date().toISOString()).run();
   const saved=await env.DB.prepare('SELECT status FROM telegram_mentions WHERE id=?').bind(id).first();
   if(saved?.status==='queued'){
@@ -65,7 +75,7 @@ async function analyze(env,entry){
     priority:low.test(entry.body)?'низкий':urgent.test(entry.body)?'высокий':'средний'
   };
   // Do not send private or corporate Telegram text to a model without explicit approval.
-  if(env.TELEGRAM_MENTIONS_AI_ENABLED!=='true'||!env.GROQ_API_KEY)return simple;
+  if(entry.signal==='private'||env.TELEGRAM_MENTIONS_AI_ENABLED!=='true'||!env.GROQ_API_KEY)return simple;
   try{
     const response=await fetch('https://api.groq.com/openai/v1/chat/completions',{
       method:'POST',
@@ -94,10 +104,13 @@ async function analyze(env,entry){
   }
 }
 function details(row){
-  const source=(row.chat_title||row.chat_id)+' | '+(row.sender_name||row.sender_id||'Участник');
-  return safeText('💬 Telegram | '+(row.category==='TASK'?'Задача':'Новости')+
-    '\n\nЧат: '+source+'\nВажность: '+row.priority+
-    '\n\n'+row.body+(row.source_link?'\n\nОткрыть сообщение: '+row.source_link:''));
+  const privateChat=row.signal==='private';
+  const source=privateChat?'Личная переписка':(row.chat_title||row.chat_id);
+  return safeText('💬 Telegram | '+(privateChat?'Личное сообщение':row.category==='TASK'?'Задача':'Новости')+
+    '\n\nОт: '+(row.sender_name||row.sender_id||'Участник')+
+    '\nКатегория: '+(row.category==='TASK'?'Задача':'Новости')+
+    '\nВажность: '+row.priority+'\n\nСообщение:\n'+row.body+
+    '\n\nИсточник: '+source+(row.source_link?'\nОткрыть сообщение: '+row.source_link:''));
 }
 export async function telegramMentionDetails(env,id){
   const row=await env.DB.prepare('SELECT * FROM telegram_mentions WHERE id=? AND status=\'done\'')
