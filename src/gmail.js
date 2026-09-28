@@ -2,6 +2,7 @@
 // Source behavior: preserve work-mail filtering, AI summaries, task creation,
 // durable Gmail message-id deduplication. Do not send mail or modify Gmail.
 import {loadEncryptedGmailRefreshToken} from './google-oauth.js';
+import {triageWorkMailSubject} from './work-triage.js';
 
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const categories = new Set(['ЗАДАЧА','ВАЖНО','НОВОСТЬ','FYI','ВСТРЕЧА','ДОКУМЕНТ','ПИСЬМО','МУСОР']);
@@ -169,10 +170,8 @@ export function gmailAttachmentManifest(message) {
 }
 
 export async function analyzeGmailEmail(env,email) {
-  if (!env.GROQ_API_KEY || (env.ASSISTANT_SCOPE==='work' && env.OUTLOOK_AI_ENABLED!=='true')) return {
-    category:'ПИСЬМО',priority:'средний',summary:cut(email.subject+' - '+(email.body || 'Текст письма отсутствует'),500),
-    action:'Нужен просмотр владельца; автоматическая задача не создаётся',deadline_text:'Не указан',deadline_iso:'',needs_review:true
-  };
+  if (!env.GROQ_API_KEY || (env.ASSISTANT_SCOPE==='work' && env.OUTLOOK_AI_ENABLED!=='true'))
+    return triageWorkMailSubject(email.subject);
   const prompt='Ты Персональный помощник, персональный рабочий помощник Александра. Анализируй рабочие письма. '+
     'Ответ строго JSON c ключами category,priority,summary,action,deadline_text,deadline_iso. '+
     'category: ЗАДАЧА,ВАЖНО,НОВОСТЬ,FYI,ВСТРЕЧА,ДОКУМЕНТ,ПИСЬМО,МУСОР. '+
