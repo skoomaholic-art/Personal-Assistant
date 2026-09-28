@@ -1,6 +1,8 @@
 import {backMarkup} from './router.js';
 
-const key=chatId=>'assistant:memory:'+String(chatId);
+const key=(env,chatId)=>env.ASSISTANT_SCOPE==='work'?
+  'assistant:work-memory:'+String(chatId):
+  'assistant:memory:'+String(chatId);
 const cut=(s,n)=>String(s??'').trim().slice(0,n);
 const yes={inline_keyboard:[
   [{text:'✅ Запомнить',callback_data:'memory:yes'},{text:'❌ Не сохранять',callback_data:'memory:no'}],
@@ -8,7 +10,7 @@ const yes={inline_keyboard:[
 ]};
 export async function personalMemory(env,chatId){
   const record=await env.DB.prepare("SELECT data FROM states WHERE chat_id=? AND mode='MEMORY'")
-    .bind(key(chatId)).first();
+    .bind(key(env,chatId)).first();
   try {
     const items=JSON.parse(record?.data||'[]');
     return Array.isArray(items)?items.filter(x=>typeof x==='string').slice(0,30):[];
@@ -56,7 +58,7 @@ export async function memoryCallback(env,chatId,action){
     env.DB.prepare(
       "INSERT INTO states(chat_id,mode,data,updated_at) VALUES(?,'MEMORY',?,?) "+
       "ON CONFLICT(chat_id) DO UPDATE SET mode='MEMORY',data=excluded.data,updated_at=excluded.updated_at"
-    ).bind(key(chatId),JSON.stringify(list),Math.floor(Date.now()/1000)),
+    ).bind(key(env,chatId),JSON.stringify(list),Math.floor(Date.now()/1000)),
     env.DB.prepare("DELETE FROM states WHERE chat_id=? AND mode='MEMORY_PENDING'")
       .bind(String(chatId))
   ]);
@@ -72,6 +74,6 @@ export async function forgetMemory(env,chatId,position){
   const removed=items.splice(index,1)[0];
   await env.DB.prepare(
     "UPDATE states SET data=?,updated_at=? WHERE chat_id=? AND mode='MEMORY'"
-  ).bind(JSON.stringify(items),Math.floor(Date.now()/1000),key(chatId)).run();
+  ).bind(JSON.stringify(items),Math.floor(Date.now()/1000),key(env,chatId)).run();
   return {text:'Удалено из памяти: '+cut(removed,170),reply_markup:backMarkup()};
 }
