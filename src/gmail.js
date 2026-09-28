@@ -74,9 +74,18 @@ export function isWorkGmailMessage(message,env) {
   // the exact configured corporate sender is accepted, with Gmail's recorded
   // authentication result aligned to the work domain.
   const auth=String(h['authentication-results']||'');
-  const authenticated=domain && auth.toLowerCase().split(';').some(part =>
+  // Match exact identities, not prefix lookalikes such as fmedia.kz.evil.
+  const escapedDomain=domain.replace(/[.*+?^$\x7b\x7d()|[\]\\]/g,'\\  const authenticated=domain && auth.toLowerCase().split(';').some(part =>
     (part.includes('dkim=pass') && part.includes('header.d='+domain)) ||
-    (part.includes('spf=pass') && part.includes('smtp.mailfrom='+work)));
+    (part.includes('spf=pass') && part.includes('smtp.mailfrom='+work)));');
+  const escapedWork=work.replace(/[.*+?^$\x7b\x7d()|[\]\\]/g,'\\  const authenticated=domain && auth.toLowerCase().split(';').some(part =>
+    (part.includes('dkim=pass') && part.includes('header.d='+domain)) ||
+    (part.includes('spf=pass') && part.includes('smtp.mailfrom='+work)));');
+  const signed=new RegExp('(?:^|[;\\s])header\\.d='+escapedDomain+'(?=$|[;\\s(])','i');
+  const envelope=new RegExp('(?:^|[;\\s])smtp\\.mailfrom='+escapedWork+'(?=$|[;\\s(])','i');
+  const authenticated=domain&&auth.toLowerCase().split(';').some(part=>
+    (part.includes('dkim=pass')&&signed.test(part))||
+    (part.includes('spf=pass')&&envelope.test(part)));
   return Boolean(work && domain && sender.includes(work) && authenticated);
 }
 
