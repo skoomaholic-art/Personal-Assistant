@@ -13,7 +13,7 @@ const USER_ID=/^[1-9]\d{0,19}$/;
 const privateAllowed=(chatId,senderId,ids)=>USER_ID.test(chatId)&&senderId===chatId&&
   String(ids||'').split(',').some(x=>x.trim()===chatId);
 const LINK=/^https:\/\/t\.me\/(?:c\/\d+\/\d+|[a-zA-Z0-9_]{5,32}\/\d+)(?:\?[^\s]{0,80})?$/;
-const taskWords=/(?:^|[\s,.:;!?])(?:подготовь|сделай|создай|проверь|пришли|отправь|добавь|обнови|исправь|закажи|запланируй|найди|нужно\s+(?:сделать|подготовить|обновить|отправить|проверить)|прошу\s+(?:сделать|подготовить|прислать|отправить)|өтінем|дайында|жібер|жаса|тексер|please\s+(?:send|prepare|check|update|make)|could\s+you\s+(?:send|prepare|check|update))(?=$|[\s,.:;!?])/iu;
+const taskWords=/(?:^|[\s,.:;!?])(?:подготовь|сделай|создай|проверь|пришли|отправь|добавь|обнови|исправь|замени|поменяй|отметь|тэгай|тегай|закажи|запланируй|найди|можешь(?:\s+пожалуйста)?\s+(?:меня\s+)?(?:тэгать|тегать|подготовить|заменить|отправить|проверить|обновить)|нужно\s+(?:сделать|подготовить|обновить|отправить|проверить)|прошу\s+(?:сделать|подготовить|прислать|отправить)|өтінем|дайында|жібер|жаса|тексер|please\s+(?:send|prepare|check|update|make)|could\s+you\s+(?:send|prepare|check|update))(?=$|[\s,.:;!?])/iu;
 const urgent=/(?:срочно|сегодня|немедленно|asap|urgent|шұғыл|бүгін)/iu;
 const low=/(?:не\s+срочно|когда\s+будет\s+время|no\s+rush)/iu;
 const username=s=>cap(s,160).replace(/[\r\n]+/g,' ');
@@ -43,7 +43,7 @@ export async function ingestTelegramMention(request,env){
     if(data.source_type!=='private'||data.signal!=='private'||
       !privateAllowed(chatId,String(data.sender_id||''),env.TELEGRAM_MENTION_PRIVATE_CHAT_IDS))
       return json({error:'private_chat_not_allowed'},403);
-  }else if(data.source_type==='private'||!allowed(chatId,env.TELEGRAM_MENTION_CHAT_IDS))
+  }else if(data.source_type==='private'||!chatId.startsWith('-')||!allowed(chatId,env.TELEGRAM_MENTION_CHAT_IDS))
     return json({error:'chat_not_allowed'},403);
   const id=chatId+':'+data.message_id;
   const link=!isPrivate&&LINK.test(String(data.link||''))?String(data.link):'';
