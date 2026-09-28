@@ -14,6 +14,7 @@ import {relayCallback,relayFollowup,handleRelayJoin,listRelayContacts} from './t
 import {memoryCallback,showMemory} from './memory.js';
 import {dailyBriefPreview,runDailyBrief} from './brief.js';
 import {startOutlookOAuth,completeOutlookOAuth,pollOutlook} from './outlook.js';
+import {miniApp} from './miniapp.js';
 import {connectionStatus} from './admin.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
@@ -240,7 +241,8 @@ async function prepareAnswer(update, env) {
   const callback=update?.callback_query?.data;
   if (action==='menu' || action==='cancel') {
     await clearState(env,chatId);
-    return {text:action==='cancel'?'Ввод отменён. Что делаем?':'Что делаем?',reply_markup:menuMarkup()};
+    return {text:action==='cancel'?'Ввод отменён. Что делаем?':'Что делаем?',
+      reply_markup:menuMarkup(env.MINIAPP_URL||'')};
   }
   if (action==='reset') {
     await clearState(env,chatId);
@@ -258,6 +260,11 @@ async function prepareAnswer(update, env) {
   }
   if (['tasks','report','newtask','voicehelp'].includes(action))
     return taskMenuAction(env,chatId,action);
+  if(action==='app')
+    return {text:'📱 Открой панель помощника:',
+      reply_markup:{inline_keyboard:[[
+        {text:'Открыть панель',web_app:{url:String(env.MINIAPP_URL||new URL('/app','https://rahal-mamut-staging.alexandr-petrossov.workers.dev').href)}}
+      ],[{text:'☰ Меню',callback_data:'menu'}]]}};
   if(action==='calendar')return calendarAgenda(env,'today');
   if(action==='compose'){
     await setState(env,chatId,'PERSONAL_MAIL_INPUT','{}');
@@ -519,6 +526,7 @@ export default {
   async fetch(request,env) {
     const path=new URL(request.url).pathname;
     if(path==='/admin/connections') return connectionStatus(request,env);
+    if(path==='/app'||path.startsWith('/app/api/'))return miniApp(request,env);
     if(path==='/oauth/outlook/start')return startOutlookOAuth(request,env);
     if(path==='/oauth/outlook/callback')return completeOutlookOAuth(request,env);
     if(path==='/oauth/google/calendar/start')return startCalendarOAuth(request,env);
