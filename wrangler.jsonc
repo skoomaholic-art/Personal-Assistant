@@ -24,11 +24,15 @@
     "GMAIL_PERSONAL_INGEST_ENABLED": "true",
     "PERSONAL_GMAIL_SEND_ENABLED": "true",
     "GOOGLE_CALENDAR_SETUP_ENABLED": "true",
-    "GOOGLE_CALENDAR_ENABLED": "false",
+    "GOOGLE_CALENDAR_ENABLED": "true",
     "TELEGRAM_RELAY_ENABLED": "true",
     "DAILY_BRIEF_ENABLED": "false",
     "OUTLOOK_SETUP_ENABLED": "false",
-    "OUTLOOK_POLL_ENABLED": "false"
+    "OUTLOOK_POLL_ENABLED": "false",
+    "MINIAPP_URL": "https://rahal-mamut-staging.alexandr-petrossov.workers.dev/app",
+    "OUTLOOK_CALENDAR_READ_ENABLED": "false",
+    "OUTLOOK_CALENDAR_WRITE_ENABLED": "false",
+    "OUTLOOK_AI_ENABLED": "false"
   },
   "d1_databases": [
     {
