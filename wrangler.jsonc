@@ -21,18 +21,20 @@
     "GMAIL_SEND_ENABLED": "false",
     "TASK_CONVERSATION_ENABLED": "true",
     "TASK_VOICE_ENABLED": "true",
-    "GMAIL_PERSONAL_INGEST_ENABLED": "true",
-    "PERSONAL_GMAIL_SEND_ENABLED": "true",
-    "GOOGLE_CALENDAR_SETUP_ENABLED": "true",
-    "GOOGLE_CALENDAR_ENABLED": "true",
-    "TELEGRAM_RELAY_ENABLED": "true",
+    "GMAIL_PERSONAL_INGEST_ENABLED": "false",
+    "PERSONAL_GMAIL_SEND_ENABLED": "false",
+    "GOOGLE_CALENDAR_SETUP_ENABLED": "false",
+    "GOOGLE_CALENDAR_ENABLED": "false",
+    "TELEGRAM_RELAY_ENABLED": "false",
     "DAILY_BRIEF_ENABLED": "false",
     "OUTLOOK_SETUP_ENABLED": "false",
     "OUTLOOK_POLL_ENABLED": "false",
     "MINIAPP_URL": "https://rahal-mamut-staging.alexandr-petrossov.workers.dev/app",
     "OUTLOOK_CALENDAR_READ_ENABLED": "false",
     "OUTLOOK_CALENDAR_WRITE_ENABLED": "false",
-    "OUTLOOK_AI_ENABLED": "false"
+    "OUTLOOK_AI_ENABLED": "false",
+    "ASSISTANT_SCOPE": "work",
+    "WORK_OUTLOOK_SEND_ENABLED": "false"
   },
   "d1_databases": [
     {
