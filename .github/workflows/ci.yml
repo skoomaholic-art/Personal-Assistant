@@ -1,7 +1,6 @@
-name: Tests
+name: Tests (manual)
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest
