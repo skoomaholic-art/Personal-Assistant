@@ -18,8 +18,8 @@ from pathlib import Path
 from telethon import TelegramClient, events
 
 LOG = logging.getLogger("telegram-mentions")
-USER_REF = re.compile(r"(?<![\\w])@skoomaholic\\b", re.IGNORECASE)
-CHAT_ID = re.compile(r"^-?\\d{1,20}$")
+USER_REF = re.compile(r"(?<![A-Za-z0-9_])@skoomaholic(?=$|[^A-Za-z0-9_])", re.IGNORECASE)
+CHAT_ID = re.compile(r"^-?[0-9]{1,20}$")
 
 
 def config():
@@ -99,7 +99,7 @@ async def run(args):
             if getattr(sender, "id", None) == owner.id:
                 return
             text = str(msg.raw_text or "").strip()
-            if not text:
+            if not text and not msg.media:
                 return  # Do not download media or upload attachments.
             direct = bool(USER_REF.search(text) or getattr(msg, "mentioned", False))
             signal = "mention"
@@ -110,6 +110,7 @@ async def run(args):
                 signal = "reply"
             if not direct:
                 return
+            text = text or '[Медиа без подписи]'
             chat = await event.get_chat()
             date = msg.date.astimezone(timezone.utc).isoformat() if msg.date else ""
             sender_name = " ".join(x for x in (
