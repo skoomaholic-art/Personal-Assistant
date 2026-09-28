@@ -116,6 +116,64 @@ async function analyze(env,entry){
     return simple;
   }
 }
+function reviewMarkup(id){
+  return {inline_keyboard:[
+    [{text:'✅ В задачи',callback_data:'mention:task:'+id},
+     {text:'📰 В новости',callback_data:'mention:news:'+id}],
+    [{text:'🗑 Не рабочее',callback_data:'mention:ignore:'+id},
+     {text:'☰ Меню',callback_data:'menu'}]
+  ]};
+}
+export async function reviewTelegramMention(env,callback){
+  const match=/^mention:(task|news|ignore):(-?\\d{1,20}:\\d{1,16})$/.exec(callback);
+  if(!match)return {text:'Неизвестное действие.',reply_markup:backMarkup()};
+  const [,action,id]=match;
+  const row=await env.DB.prepare(
+    "SELECT * FROM telegram_mentions WHERE id=? AND category='REVIEW' AND status='done'"
+  ).bind(id).first();
+  if(!row)return {text:'Сообщение уже разобрано или недоступно.',reply_markup:backMarkup()};
+  if(action==='ignore'){
+    const result=await env.DB.prepare(
+      "UPDATE telegram_mentions SET category='IGNORED',body='',summary='',"+
+      "sender_name='',source_link='',notification_status='disabled' "+
+      "WHERE id=? AND category='REVIEW' AND status='done'"
+    ).bind(id).run();
+    return {text:result.meta.changes===1?
+      '🗑 Сообщение исключено из рабочих записей; текст очищен.':
+      'Сообщение уже разобрано.',reply_markup:backMarkup()};
+  }
+  if(action==='news'){
+    const result=await env.DB.prepare(
+      "UPDATE telegram_mentions SET category='NEWS' "+
+      "WHERE id=? AND category='REVIEW' AND status='done'"
+    ).bind(id).run();
+    return {text:result.meta.changes===1?
+      '📰 Добавлено в рабочие новости.':
+      'Сообщение уже разобрано.',reply_markup:backMarkup()};
+  }
+  const idTask='tgm:'+id;
+  const description=cap('Из Telegram. Чат: '+(row.chat_title||row.chat_id)+
+    '. Автор: '+(row.sender_name||row.sender_id)+
+    (row.source_link?'. Ссылка: '+row.source_link:'')+'\\n\\n'+row.body,900);
+  const instant=new Date().toISOString();
+  // One D1 transaction: no orphan task if the source record was changed.
+  const [,updated]=await env.DB.batch([
+    env.DB.prepare(
+      'INSERT OR IGNORE INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) '+
+      "SELECT ?,NULL,?,?, 'NEW',?, '', '',?,? "+
+      "WHERE EXISTS(SELECT 1 FROM telegram_mentions WHERE id=? AND category='REVIEW' AND status='done')"
+    ).bind(idTask,cap(row.summary||row.body,180),description,
+      normalizePriority(row.priority),instant,instant,id),
+    env.DB.prepare(
+      "UPDATE telegram_mentions SET category='TASK',task_id=? "+
+      "WHERE id=? AND category='REVIEW' AND status='done'"
+    ).bind(idTask,id)
+  ]);
+  return {text:updated.meta.changes===1?
+    '✅ Добавлено в задачи:\\n'+cap(row.summary||row.body,180):
+    'Сообщение уже разобрано.',reply_markup:updated.meta.changes===1?
+      taskMarkup(idTask,'NEW'):backMarkup()};
+}
 function details(row){
   const privateChat=row.signal==='private';
   const source=privateChat?'Разрешённый контакт':(row.chat_title||row.chat_id);
@@ -163,23 +221,25 @@ export async function processTelegramMention(env,id){
     if(!row)throw Error('mention_missing');
     const result=await analyze(env,row);
     const taskId='tgm:'+row.id;
+    const statements=[];
     if(result.category==='TASK'){
       const description=cap('Из Telegram. Чат: '+(row.chat_title||row.chat_id)+
         '. Автор: '+(row.sender_name||row.sender_id)+
         (row.source_link?'. Ссылка: '+row.source_link:'')+'\n\n'+row.body,900);
       const nowIso=new Date().toISOString();
-      await env.DB.prepare(
+      statements.push(env.DB.prepare(
         'INSERT OR IGNORE INTO tasks(task_id,email_id,title,description,status,priority,due_iso,due_text,created_at,updated_at) '+
         "VALUES(?,NULL,?,?,'NEW',?,'','',?,?)"
-      ).bind(taskId,cap(result.title,180),description,result.priority,nowIso,nowIso).run();
+      ).bind(taskId,cap(result.title,180),description,result.priority,nowIso,nowIso));
     }
     const alert=env.TELEGRAM_MENTION_NOTIFICATIONS_ENABLED==='true'&&
       env.TELEGRAM_CHAT_ID&&env.TELEGRAM_BOT_TOKEN?'queued':'disabled';
-    await env.DB.prepare(
+    statements.push(env.DB.prepare(
       "UPDATE telegram_mentions SET category=?,summary=?,priority=?,task_id=?,status='done',"+
       "notification_status=? WHERE id=? AND status='processing'"
     ).bind(result.category,cap(result.summary,280),result.priority,
-      result.category==='TASK'?taskId:'',alert,id).run();
+      result.category==='TASK'?taskId:'',alert,id));
+    await env.DB.batch(statements);
     if(alert==='queued')await notify(env,id);
     return 'done';
   }catch(error){
