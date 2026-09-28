@@ -114,7 +114,7 @@ async def run(args):
                 return
             msg = event.message
             sender = await event.get_sender()
-            if getattr(sender, "id", None) == owner.id or getattr(sender, "bot", False) or not sender:
+            if not sender or getattr(sender, "id", None) in (owner.id, 777000) or getattr(sender, "bot", False):
                 return
             if private and (not getattr(sender, "id", None) or str(sender.id) != str(event.chat_id)):
                 return
