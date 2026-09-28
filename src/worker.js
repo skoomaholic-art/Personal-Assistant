@@ -1,6 +1,6 @@
 import {
   commandOf, getChatId, QUICK_ACTIONS, hasValidSecret, safeText,
-  menuMarkup, backMarkup, emailMarkup, taskMarkup, normalizePriority,
+  menuMarkup, moreMarkup, backMarkup, emailMarkup, taskMarkup, normalizePriority,
   isEmailObject, localDayBounds
 } from './router.js';
 import {pollGmail, ingestGmailId} from './gmail.js';
@@ -213,7 +213,7 @@ function fromRows(title, rows, kind) {
     const value = kind === 'task' ? r.title : r.subject;
     lines.push('\n'+(index+1)+'. '+safeText(value,130));
     if (kind === 'task') {
-      lines.push('Статус: '+r.status+' | Дедлайн: '+(r.due_text || 'Не указан'));
+      lines.push('Важность: '+r.priority+' | Дедлайн: '+(r.due_text || 'Не указан'));
       buttons.push([{text:(index+1)+'. '+safeText(value,35),callback_data:'task:view:'+r.task_id}]);
     } else {
       lines.push(safeText(r.summary,170));
@@ -264,7 +264,19 @@ async function prepareAnswer(update, env) {
     ]);
     return {text:'✅ Контекст очищен.',reply_markup:backMarkup()};
   }
-  if (['tasks','report','newtask','voicehelp'].includes(action))
+  if(action==='more')return {text:'Другие разделы',reply_markup:moreMarkup()};
+  if(['tasks','progress','done'].includes(action)){
+    const status={tasks:'NEW',progress:'IN_PROGRESS',done:'DONE'}[action];
+    const title={tasks:'📥 Задачи - ещё не взяты в работу',
+      progress:'🟡 В работе',done:'✅ Выполненные'}[action];
+    const rows=await env.DB.prepare(
+      "SELECT task_id,title,status,priority,due_text FROM tasks WHERE status=? "+
+      "ORDER BY CASE priority WHEN 'высокий' THEN 0 WHEN 'средний' THEN 1 ELSE 2 END, "+
+      "updated_at DESC LIMIT 8"
+    ).bind(status).all();
+    return fromRows(title,rows.results||[],'task');
+  }
+  if (['report','newtask','voicehelp'].includes(action))
     return taskMenuAction(env,chatId,action);
   if(action==='app')
     return {text:'📱 Открой панель помощника:',
@@ -298,7 +310,7 @@ async function prepareAnswer(update, env) {
       .replace(/^(?:про|о|об|в|по|за|на)\s+/i,'').trim().slice(0,90)||'Казахстан';
     const [external,fromMail]=await Promise.all([
       latestNews(query),
-      listEmails(env,"category IN ('НОВОСТЬ','FYI')")
+      listEmails(env,"category IN ('НОВОСТЬ','FYI') AND action='Действий не требуется'")
     ]);
     const inbox=fromMail.slice(0,3).map(x=>'• '+val(x.subject,100)).join('\n');
     return {text:safeText((inbox?'📬 Из твоей почты:\n'+inbox+'\n\n':'')+
@@ -362,16 +374,41 @@ async function prepareAnswer(update, env) {
     return taskCallback(env,chatId,callback,update.update_id);
   if (callback?.startsWith('task:view:')) {
     const t=await env.DB.prepare("SELECT task_id,title,description,status,priority,due_text FROM tasks WHERE task_id=? AND status!='DELETED'").bind(callback.slice(10)).first();
-    return t?{text:safeText('✅ Задача\n\n'+t.title+'\n\n'+t.description+'\nСтатус: '+t.status+'\nПриоритет: '+t.priority+'\nДедлайн: '+t.due_text),reply_markup:taskMarkup(t.task_id)}:{text:'Задача не найдена.',reply_markup:backMarkup()};
+    return t?{text:safeText('✅ Задача\n\n'+t.title+'\n\n'+t.description+'\nСтатус: '+t.status+'\nПриоритет: '+t.priority+'\nДедлайн: '+t.due_text),reply_markup:taskMarkup(t.task_id,t.status)}:{text:'Задача не найдена.',reply_markup:backMarkup()};
   }
-  if (callback?.startsWith('task:done:') || callback?.startsWith('task:progress:')) {
-    const done=callback.startsWith('task:done:');
-    const id=callback.slice(done?10:14);
-    const result=await env.DB.prepare("UPDATE tasks SET status=?,updated_at=? WHERE task_id=? AND status NOT IN ('DONE','DELETED')")
-      .bind(done?'DONE':'IN_PROGRESS',new Date().toISOString(),id).run();
+  if(callback?.startsWith('task:progress:')){
+    const id=callback.slice('task:progress:'.length);
+    const task=await env.DB.prepare(
+      "SELECT title,priority FROM tasks WHERE task_id=? AND status='NEW'"
+    ).bind(id).first();
+    if(!task)return {text:'Задача уже взята в работу или закрыта.',reply_markup:backMarkup()};
+    return {text:safeText('Какую важность установить для «'+task.title+'»? '+
+      'Предварительная важность из письма: '+task.priority),
+      reply_markup:{inline_keyboard:[
+        [{text:'🔴 Высокая',callback_data:'task:priority:high:'+id}],
+        [{text:'🟡 Средняя',callback_data:'task:priority:medium:'+id}],
+        [{text:'🟢 Низкая',callback_data:'task:priority:low:'+id}],
+        [{text:'☰ Меню',callback_data:'menu'}]
+      ]}};
+  }
+  if(callback?.startsWith('task:priority:')){
+    const match=/^task:priority:(high|medium|low):(.+)$/.exec(callback);
+    if(!match)return {text:'Некорректный выбор важности.',reply_markup:backMarkup()};
+    const priority={high:'высокий',medium:'средний',low:'низкий'}[match[1]];
+    const result=await env.DB.prepare(
+      "UPDATE tasks SET status='IN_PROGRESS',priority=?,updated_at=? WHERE task_id=? AND status='NEW'"
+    ).bind(priority,new Date().toISOString(),match[2]).run();
     return {text:result.meta.changes===1?
-      (done?'✅ Задача отмечена выполненной.':'🟡 Задача в работе.'):
-      'Задача уже закрыта или удалена.',reply_markup:backMarkup()};
+      '🟡 Взято в работу. Важность: '+priority+'.':'Задача уже взята в работу или закрыта.',
+      reply_markup:backMarkup()};
+  }
+  if(callback?.startsWith('task:done:')){
+    const id=callback.slice('task:done:'.length);
+    const result=await env.DB.prepare(
+      "UPDATE tasks SET status='DONE',updated_at=? WHERE task_id=? AND status NOT IN ('DONE','DELETED')"
+    ).bind(new Date().toISOString(),id).run();
+    return {text:result.meta.changes===1?'✅ Задача выполнена.':'Задача уже закрыта или удалена.',
+      reply_markup:backMarkup()};
   }
   if (callback?.startsWith('email:reply:')) {
     if(workOnly(env)){
