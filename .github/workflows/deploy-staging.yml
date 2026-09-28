@@ -16,19 +16,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Require authorized Cloudflare credentials
+      - name: Normalize Cloudflare API token
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RAW_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "::error::CLOUDFLARE_API_TOKEN is missing. No deployment was attempted."
-            exit 1
-          fi
+          node <<'NODE'
+          const fs = require('node:fs');
+          let token = (process.env.RAW_CLOUDFLARE_API_TOKEN || '').trim();
+          token = token.replace(/^CLOUDFLARE_API_TOKEN\\s*=\\s*/i, '')
+            .replace(/^Bearer\\s+/i, '').replace(/^["']|["']$/g, '').trim();
+          if (!token || /\\s/.test(token)) {
+            console.error('::error::Cloudflare secret is empty or malformed. Paste the API token value only.');
+            process.exit(1);
+          }
+          process.stdout.write('::add-mask::' + token + '\\n');
+          fs.appendFileSync(process.env.GITHUB_ENV, 'CLOUDFLARE_API_TOKEN=' + token + '\\n');
+          NODE
       - name: Ensure idempotent Telegram inbox schema exists on existing D1
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx --yes wrangler@4 d1 execute rahal-mamut-staging --remote --file=migrations/0006_telegram_mentions.sql --config=wrangler.jsonc
       - name: Publish existing staging Worker
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx --yes wrangler@4 deploy --config=wrangler.jsonc
