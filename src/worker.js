@@ -670,8 +670,8 @@ async function processSLPNotice(job,env) {
   if(!await claimNotification(env,key,'slp_notice',id))return;
   try {
     await send(env,env.TELEGRAM_CHAT_ID,{
-      text:'📺 SLP 2.0: требуется внимание\\n\\n'+row.body+
-        (row.source_link?'\\n\\nОткрыть SLP: '+row.source_link:'')
+      text:'📺 SLP 2.0: требуется внимание\n\n'+row.body+
+        (row.source_link?'\n\nОткрыть SLP: '+row.source_link:'')
     });
     await finishNotification(env,key,'sent');
   } catch(error) {
