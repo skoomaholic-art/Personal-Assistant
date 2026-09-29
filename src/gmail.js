@@ -323,10 +323,14 @@ export async function ingestGmailId(env, id) {
       relatedTaskId:analysis.related_task_id,emailId:email.email_id,
       createdAt:email.received_at
     }):{classification:'INFO',created:false,updated:false,duplicate:false,taskId:''};
-    const importantUpdate=source.updated&&
-      (analysis.priority==='высокий'||Boolean(analysis.deadline_iso));
+    // Notify for an action or a manual decision, not merely a "ВАЖНО" label.
+    // Every Gmail message ID is claimed only once, including follow-ups.
+    const requiresAction=Boolean(analysis.action)&&
+      analysis.action!=='Действий не требуется';
     const notify=workMail&&env.WORKER_EMAIL_NOTIFICATIONS==='true'&&
-      !source.duplicate&&(source.created||importantUpdate||analysis.category==='ВАЖНО');
+      !source.duplicate&&(source.created||
+      (requiresAction&&(classification==='UPDATE'||classification==='REVIEW'||
+        analysis.owner_action_required===true)));
     const update=env.DB.prepare(
       "UPDATE emails SET received_at=?,from_name=?,from_email=?,subject=?,summary=?,action=?,"+
       "category=?,priority=?,deadline_text=?,deadline_iso=?,has_attachments=?,status=?,notification_status=? "+
@@ -388,6 +392,8 @@ export async function pollGmail(env) {
     q='in:inbox after:'+floor+' -in:spam -in:trash';
   }
   if(!q)q='in:inbox newer_than:2d -in:spam -in:trash';
+  // Explicit queries are never allowed to override the spam/trash exclusion.
+  q='('+q+') -in:spam -in:trash';
   if(env.ASSISTANT_SCOPE==='work'){
     // Scope the Gmail LIST API itself to work headers, rather than fetching
     // arbitrary personal messages and discarding them after a full download.
