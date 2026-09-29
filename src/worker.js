@@ -25,7 +25,8 @@ import {importLegacyTasks} from './legacy-import.js';
 import {telegramCutoverReadiness} from './telegram-status.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
-import {storeSourceEvent,taskHistory} from './task-store.js';
+import {storeSourceEvent,taskHistory,claimNotification,finishNotification} from './task-store.js';
+import {ingestSLPNotice} from './slp-integration.js';
 
 const JSON_HEADERS = {'content-type':'application/json; charset=utf-8', 'cache-control':'no-store'};
 const ok = (data, status = 200) => Response.json(data, {status, headers:JSON_HEADERS});
@@ -655,6 +656,29 @@ async function ingestTask(request,env) {
   }
   return ok({ok:true,stored:result.meta.changes===1,duplicate:result.meta.changes===0});
 }
+async function processSLPNotice(job,env) {
+  if(env.SLP_NOTICE_NOTIFICATIONS!=='true')return;
+  const id=String(job.id||'');
+  if(!/^[a-f0-9]{32}$/.test(id))return;
+  const row=await env.DB.prepare(
+    "SELECT source_title,body,source_link,task_id FROM inbound_events "+
+    "WHERE source_type='slp' AND source_id=?"
+  ).bind(id).first();
+  if(!row)return;
+  // Mark before attempting Telegram: an uncertain network outcome must not be resent.
+  const key='slp-notice:'+id;
+  if(!await claimNotification(env,key,'slp_notice',id))return;
+  try {
+    await send(env,env.TELEGRAM_CHAT_ID,{
+      text:'📺 SLP 2.0: требуется внимание\\n\\n'+row.body+
+        (row.source_link?'\\n\\nОткрыть SLP: '+row.source_link:'')
+    });
+    await finishNotification(env,key,'sent');
+  } catch(error) {
+    await finishNotification(env,key,'unknown');
+    failLog('slp_notice_delivery_unknown',error);
+  }
+}
 async function processEmail(job,env) {
   if(env.WORKER_EMAIL_NOTIFICATIONS!=='true') return;
   const e=await env.DB.prepare('SELECT * FROM emails WHERE email_id=?').bind(job.email_id).first();
@@ -667,9 +691,12 @@ async function processEmail(job,env) {
     "SELECT classification,task_id FROM inbound_events WHERE source_type IN ('gmail','email_ingest') AND source_id=?"
   ).bind(e.email_id).first();
   const heading=source?.classification==='UPDATE'?'🧩 Дополнение к задаче':
-    source?.classification==='TASK'?'📥 Новая задача':'🔥 Важная рабочая информация';
+    source?.classification==='TASK'?'📥 Новая задача':
+    source?.classification==='REVIEW'?'⚠️ Письмо на проверку':'🔥 Важная рабочая информация';
   const notice=heading+'\n\nТема: '+e.subject+'\nОт: '+e.from_name+'\n\n'+e.summary+
-    (e.action&&e.action!=='Действий не требуется'?'\n\nЧто требуется: '+e.action:'');
+    (e.action&&e.action!=='Действий не требуется'?'\n\nЧто требуется: '+e.action:'')+
+    (e.deadline_text&&e.deadline_text!=='Не указан'?'\nСрок: '+e.deadline_text:'')+
+    (source?.source_link?'\n\nОткрыть письмо: '+source.source_link:'');
   await send(env,env.TELEGRAM_CHAT_ID,{
     text:notice,
     ...(env.WORKER_EMAIL_WORKER_CALLBACKS_ENABLED==='true'?
@@ -731,6 +758,10 @@ export default {
       try { return await webhook(request,env); }
       catch(e){ failLog('webhook_error',e);return ok({error:'temporary'},503); }
     }
+    if(request.method==='POST'&&path==='/internal/slp/notice') {
+      try{return await ingestSLPNotice(request,env);}
+      catch(e){failLog('slp_ingest_failed',e);return ok({error:'temporary'},503);}
+    }
     if(request.method==='POST'&&path==='/internal/ingest/email') {
       try { return await ingestEmail(request,env); }
       catch(e){failLog('email_ingest_error',e);return ok({error:'temporary'},503);}
@@ -751,6 +782,7 @@ export default {
           const outcome=await processTelegramMention(env,msg.body.id);
           if(outcome==='busy'){msg.retry({delaySeconds:15});continue;}
         } else if(msg.body?.kind==='email') await processEmail(msg.body,env);
+        else if(msg.body?.kind==='slp_notice') await processSLPNotice(msg.body,env);
         else if(msg.body?.kind==='gmail_ingest') {
           const outcome=await ingestGmailId(env,msg.body.id);
           if(outcome?.busy) { msg.retry({delaySeconds:30}); continue; }
