@@ -1,26 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync} from 'node:fs';
 import {
   gmailAccessToken, gmailHeaders, isWorkGmailMessage, normalizeGmailMessage,
   analyzeGmailEmail, ingestGmailId, pollGmail
 } from '../src/gmail.js';
 
-function sampleMail({id='a1b2c3d4',from='Vendor <notice@vendor.example>',to='Alex <worker@work.example>',body='Please review by Friday',subject='Review'}={}) {
+const PASS_AUTH='mx.google.com; dkim=pass header.i=@work.example header.s=sel header.b=abc; '+
+  'spf=pass (google.com: domain of worker@work.example designates 192.0.2.1 as permitted sender) '+
+  'smtp.mailfrom=worker@work.example; dmarc=pass header.from=work.example';
+function sampleMail({id='a1b2c3d4',from='Vendor <notice@vendor.example>',to='Alex <worker@work.example>',body='Please review by Friday',subject='Review',auth=''}={}) {
   return {id,threadId:'thread123',internalDate:'1770000000000',snippet:'short snippet',
     payload:{mimeType:'multipart/mixed',headers:[
-      {name:'From',value:from},{name:'To',value:to},{name:'Subject',value:subject}],
+      {name:'From',value:from},{name:'To',value:to},{name:'Subject',value:subject},
+      ...(auth?[{name:'Authentication-Results',value:auth}]:[])],
       parts:[
         {mimeType:'text/plain',body:{data:Buffer.from(body,'utf8').toString('base64url')}},
         {mimeType:'application/pdf',filename:'specification.pdf',body:{attachmentId:'att1'}}]
     }
   };
 }
+// The only provenance the Worker accepts: the owner's own corporate address,
+// authenticated by Gmail, forwarding a message whose original headers are kept.
+function workForward(overrides={}) {
+  return sampleMail({from:'Alex <worker@work.example>',to:'Alex <owner@personal.example>',auth:PASS_AUTH,
+    body:'From: Vendor <notice@vendor.example>\nTo: Alex <worker@work.example>\n\nPlease review by Friday',
+    ...overrides});
+}
+const TASK_REPLY={category:'ЗАДАЧА',priority:'высокий',summary:'Нужно проверить документ',
+  action:'Проверить документ',deadline_text:'Не указан',deadline_iso:'',classification:'TASK',
+  title:'Проверить документ',description:'Проверить документ',assignee:'',related_task_id:'',
+  owner_action_required:true};
 class Db {
   constructor(){
     this.sqlite=new DatabaseSync(':memory:');
-    this.sqlite.exec(readFileSync(new URL('../migrations/0001_init.sql',import.meta.url),'utf8'));
+    for(const name of readdirSync(new URL('../migrations/',import.meta.url)).sort())
+      this.sqlite.exec(readFileSync(new URL('../migrations/'+name,import.meta.url),'utf8'));
     const db=this.sqlite;
     this.mail={
       get size(){return db.prepare('SELECT COUNT(*) AS n FROM emails').get().n;},
@@ -56,12 +72,30 @@ class Db {
 
 const realFetch=global.fetch;
 test.afterEach(()=>{global.fetch=realFetch;});
-test('work message filtering matches exact corporate recipient and sender domain',()=>{
+test('work message filtering requires the exact corporate sender and an aligned authentication result',()=>{
   const env={WORK_EMAIL:'worker@work.example',WORK_DOMAIN:'work.example'};
-  assert.equal(isWorkGmailMessage(sampleMail(),env),true);
-  assert.equal(isWorkGmailMessage(sampleMail({from:'team@work.example',to:'other@personal.example'}),env),true);
-  assert.equal(isWorkGmailMessage(sampleMail({from:'team@fakework.example',to:'other@personal.example'}),env),false);
-  assert.equal(isWorkGmailMessage(sampleMail({from:'notify@vendor.example',to:'other@personal.example'}),env),false);
+  assert.equal(isWorkGmailMessage(workForward(),env),true);
+  // Each accepted identity form on its own.
+  for(const auth of ['mx.google.com; dkim=pass header.i=@work.example header.s=sel',
+    'mx.example; dkim=pass header.d=work.example',
+    'mx.google.com; spf=pass (sender ok) smtp.mailfrom=worker@work.example',
+    'mx.google.com; spf=pass smtp.mailfrom=work.example'])
+    assert.equal(isWorkGmailMessage(workForward({auth}),env),true,auth);
+  // A recipient header alone never proves corporate origin.
+  assert.equal(isWorkGmailMessage(sampleMail(),env),false);
+  assert.equal(isWorkGmailMessage(sampleMail({auth:PASS_AUTH}),env),false);
+  // The corporate sender without, or with a failed or foreign, authentication result.
+  assert.equal(isWorkGmailMessage(workForward({auth:''}),env),false);
+  for(const auth of ['mx.google.com; dkim=fail header.i=@work.example; spf=fail smtp.mailfrom=worker@work.example',
+    'mx.google.com; dkim=pass header.i=@work.example.evil; spf=pass smtp.mailfrom=worker@work.example.evil',
+    'mx.google.com; dkim=pass header.i=@fakework.example; spf=pass smtp.mailfrom=a@fakework.example',
+    'mx.google.com; dkim=pass header.i=@evilwork.example header.d=notwork.example',
+    'mx.google.com; dmarc=pass header.from=work.example'])
+    assert.equal(isWorkGmailMessage(workForward({auth}),env),false,auth);
+  // Another colleague's address, or a lookalike domain, is not the configured sender.
+  assert.equal(isWorkGmailMessage(workForward({from:'team@work.example'}),env),false);
+  assert.equal(isWorkGmailMessage(workForward({from:'worker@fakework.example'}),env),false);
+  assert.equal(isWorkGmailMessage(workForward(),{WORK_EMAIL:'worker@work.example'}),false);
 });
 test('MIME body and attachment metadata are extracted without attachment contents',()=>{
   const p=normalizeGmailMessage(sampleMail({body:'Добрый день!',subject:'Тест'}));
@@ -78,10 +112,22 @@ test('mail ingest is disabled by default even if called directly',async()=>{
   global.fetch=()=>{throw Error('No external network expected')};
   assert.deepEqual(await ingestGmailId({GMAIL_POLL_ENABLED:'false'},'a1b2c3d4'),{disabled:true});
 });
-test('AI analysis without Groq returns review flag and cannot create a task',async()=>{
+test('AI analysis without Groq falls back to subject triage and cannot create a task',async()=>{
+  global.fetch=()=>{throw Error('No external network expected')};
   const a=await analyzeGmailEmail({},normalizeGmailMessage(sampleMail()));
   assert.equal(a.needs_review,true);
-  assert.equal(a.action,'AI-анализ не выполнен');
+  assert.equal(a.classification,'REVIEW');
+  assert.equal(a.action,'Просмотреть рабочее письмо');
+  const news=await analyzeGmailEmail({},normalizeGmailMessage(sampleMail({subject:'Дайджест недели'})));
+  assert.equal(news.needs_review,false);
+  assert.equal(news.classification,'NEWS');
+});
+test('work scope keeps corporate mail away from Groq until external AI is approved',async()=>{
+  global.fetch=()=>{throw Error('No external network expected')};
+  const a=await analyzeGmailEmail({GROQ_API_KEY:'groq',ASSISTANT_SCOPE:'work',OUTLOOK_AI_ENABLED:'false'},
+    normalizeGmailMessage(workForward()));
+  assert.equal(a.needs_review,true);
+  assert.equal(a.classification,'REVIEW');
 });
 test('work mail is stored once and its task ID is stable across retries',async()=>{
   const db=new Db();
@@ -92,18 +138,15 @@ test('work mail is stored once and its task ID is stable across retries',async()
   global.fetch=async (url)=>{
     calls.push(String(url));
     if(String(url).includes('oauth2.googleapis.com/token'))return Response.json({access_token:'fake-access-token'});
-    if(String(url).includes('/messages/a1b2c3d4'))return Response.json(sampleMail());
-    if(String(url).includes('api.groq.com'))return Response.json({choices:[{message:{content:JSON.stringify({
-      category:'ЗАДАЧА',priority:'высокий',summary:'Нужно проверить документ',
-      action:'Проверить документ',deadline_text:'Не указан',deadline_iso:''
-    })}}]});
+    if(String(url).includes('/messages/a1b2c3d4'))return Response.json(workForward());
+    if(String(url).includes('api.groq.com'))return Response.json({choices:[{message:{content:JSON.stringify(TASK_REPLY)}}]});
     throw new Error('Unexpected request');
   };
-  assert.deepEqual(await ingestGmailId(env,'a1b2c3d4'),{stored:true,task:true,needs_review:false});
+  assert.deepEqual(await ingestGmailId(env,'a1b2c3d4'),{stored:true,task:true,updated:false,needs_review:false});
   assert.deepEqual(await ingestGmailId(env,'a1b2c3d4'),{duplicate:true});
   assert.equal(db.mail.size,1);
   assert.equal(db.tasks.size,1);
-  assert.ok(db.tasks.has('gmail:a1b2c3d4'));
+  assert.ok(db.tasks.has('gmail:gmail:thread123'));
   assert.equal(calls.filter(x=>x.includes('oauth2.googleapis.com')).length,1);
 });
 test('unrelated personal email stores only an ID marker and never goes to Groq',async()=>{
@@ -166,13 +209,10 @@ test('parallel Gmail workers start only one OAuth/Groq analysis for the same id'
      await waiting;
      return Response.json({access_token:'fake-token'});
    }
-   if(u.includes('/messages/a1b2c3d4'))return Response.json(sampleMail());
+   if(u.includes('/messages/a1b2c3d4'))return Response.json(workForward());
    if(u.includes('api.groq.com')){
      groqCalls++;
-     return Response.json({choices:[{message:{content:JSON.stringify({
-       category:'ЗАДАЧА',priority:'высокий',summary:'Review the document',
-       action:'Check the document',deadline_text:'Не указан',deadline_iso:''
-     })}}]});
+     return Response.json({choices:[{message:{content:JSON.stringify(TASK_REPLY)}}]});
    }
    throw Error('Unexpected URL');
  };
@@ -183,7 +223,7 @@ test('parallel Gmail workers start only one OAuth/Groq analysis for the same id'
  assert.equal(oauthCalls,1);
  assert.equal(groqCalls,0);
  releaseToken();
- assert.deepEqual(await first,{stored:true,task:true,needs_review:false});
+ assert.deepEqual(await first,{stored:true,task:true,updated:false,needs_review:false});
  assert.equal(groqCalls,1);
  assert.deepEqual(await ingestGmailId(env,'a1b2c3d4'),{duplicate:true});
  assert.equal(db.mail.size,1);
@@ -197,12 +237,9 @@ test('failed task insert rolls back email; retry can persist both together',asyn
    GROQ_API_KEY:'groq',DB:db};
  global.fetch=async url=>{
    if(String(url).includes('oauth2.googleapis.com/token'))return Response.json({access_token:'fake-token'});
-   if(String(url).includes('/messages/a1b2c3d4'))return Response.json(sampleMail());
+   if(String(url).includes('/messages/a1b2c3d4'))return Response.json(workForward());
    if(String(url).includes('api.groq.com'))return Response.json({
-     choices:[{message:{content:JSON.stringify({
-       category:'ЗАДАЧА',priority:'высокий',summary:'Create task',
-       action:'Check document',deadline_text:'Не указан',deadline_iso:''
-     })}}]
+     choices:[{message:{content:JSON.stringify(TASK_REPLY)}}]
    });
    throw Error('Unexpected URL');
  };
@@ -212,7 +249,7 @@ test('failed task insert rolls back email; retry can persist both together',asyn
  assert.equal(db.mail.size,0);
  assert.equal(db.tasks.size,0);
  db.batch=original;
- assert.deepEqual(await ingestGmailId(env,'a1b2c3d4'),{stored:true,task:true,needs_review:false});
+ assert.deepEqual(await ingestGmailId(env,'a1b2c3d4'),{stored:true,task:true,updated:false,needs_review:false});
  assert.equal(db.mail.size,1);
  assert.equal(db.tasks.size,1);
 });

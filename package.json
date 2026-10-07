@@ -6,7 +6,8 @@
   "description": "Staged Cloudflare Workers migration for Персональный помощник",
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/worker.js && node --check src/router.js && node --check src/gmail.js && node --check src/google-oauth.js && node --check src/gmail-compose.js && node --check src/drafts.js && node --check src/reminders.js && node --check src/admin.js && node --check src/voice.js && node --check src/task-dialog.js"
+    "check": "node scripts/check-syntax.mjs",
+    "flags:doc": "node scripts/flags-doc.mjs"
   },
   "engines": {
     "node": ">=20"

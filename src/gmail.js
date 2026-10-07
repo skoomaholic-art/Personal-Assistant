@@ -80,10 +80,14 @@ export function isWorkGmailMessage(message,env) {
   // lookalike prefix such as fmedia.kz.evil. Do not trust the recipient
   // header or a subject line as proof of corporate provenance.
   const authenticated=Boolean(domain&&work)&&auth.toLowerCase().split(';').some(part=>{
-    const dkim=part.match(/(?:^|\\s)header\\.d=([^\\s;()]+)/i)?.[1]||'';
-    const smtp=part.match(/(?:^|\\s)smtp\\.mailfrom=([^\\s;()]+)/i)?.[1]||'';
-    return (part.includes('dkim=pass')&&dkim===domain)||
-      (part.includes('spf=pass')&&
+    // Gmail records the signing identity as header.i=@domain (or user@domain);
+    // other receivers use header.d=domain. Both must equal the work domain exactly.
+    const dkimDomain=part.match(/(?:^|\s)header\.d=([^\s;()]+)/)?.[1]||'';
+    const dkimIdentity=part.match(/(?:^|\s)header\.i=([^\s;()]+)/)?.[1]||'';
+    const identityDomain=dkimIdentity.includes('@')?dkimIdentity.slice(dkimIdentity.lastIndexOf('@')+1):'';
+    const smtp=part.match(/(?:^|\s)smtp\.mailfrom=([^\s;()]+)/)?.[1]||'';
+    return (/(?:^|\s)dkim=pass(?:\s|$)/.test(part)&&(dkimDomain===domain||identityDomain===domain))||
+      (/(?:^|\s)spf=pass(?:\s|$)/.test(part)&&
         (smtp===work||smtp===domain||smtp.endsWith('@'+domain)));
   });
   return Boolean(work && domain && sender.includes(work) && authenticated);

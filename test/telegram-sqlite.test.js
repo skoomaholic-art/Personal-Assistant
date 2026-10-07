@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync} from 'node:fs';
 import worker from '../src/worker.js';
 
 // Use the real SQLite schema, not a permissive fake SQL string parser.
@@ -9,7 +9,8 @@ import worker from '../src/worker.js';
 class SqliteD1 {
   constructor() {
     this.sqlite=new DatabaseSync(':memory:');
-    this.sqlite.exec(readFileSync(new URL('../migrations/0001_init.sql',import.meta.url),'utf8'));
+    for(const name of readdirSync(new URL('../migrations/',import.meta.url)).sort())
+      this.sqlite.exec(readFileSync(new URL('../migrations/'+name,import.meta.url),'utf8'));
   }
   prepare(sql) {
     const statement=this.sqlite.prepare(sql);
@@ -226,8 +227,14 @@ test('voice -> transcription -> task preview -> owner confirmation -> D1 -> repo
   async function deliver(update) {
     const accepted=await worker.fetch(request(update),env);
     assert.equal(accepted.status,200);
+    const outcome=await accepted.json();
     const job=queued.shift();
+    // AI-free actions (task buttons, /report) answer inside the webhook;
+    // everything else must go through the Queue exactly once.
+    if(outcome.fast){assert.equal(job,undefined);return;}
+    assert.equal(outcome.queued,true);
     assert.ok(job);
+    assert.equal(queued.length,0);
     const ack={count:0},retry={count:0};
     await worker.queue({messages:[makeMessage(job,ack,retry)]},env);
     assert.equal(ack.count,1);
@@ -245,7 +252,7 @@ test('voice -> transcription -> task preview -> owner confirmation -> D1 -> repo
     assert.equal(DB.sqlite.prepare('SELECT title FROM tasks').get().title,
       'Подготовить спортивную презентацию');
     await deliver({update_id:212,message:{chat:{id:123},text:'/report'}});
-    assert.match(sent.at(-1).text,/Новые: 1/);
+    assert.match(sent.at(-1).text,/Не в работе: 1/);
     assert.equal(called.filter(x=>x.includes('audio/transcriptions')).length,1);
     assert.equal(called.filter(x=>x.includes('chat/completions')).length,1);
   }finally{DB.close();}
