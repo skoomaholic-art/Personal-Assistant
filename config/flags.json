@@ -1,0 +1,218 @@
+{
+  "_comment": "Единый реестр переключателей функций. Поле staging должно совпадать с vars в wrangler.jsonc (null - переменная не задана, функция выключена). test/flags.test.js проверяет совпадение и полноту; docs/FLAGS.md генерируется из этого файла командой npm run flags:doc.",
+  "groups": {
+    "ingest": "Приём входящих",
+    "external_ai": "Передача данных во внешнюю модель (Groq)",
+    "notify": "Уведомления владельцу",
+    "outbound": "Отправка наружу",
+    "calendar": "Календари",
+    "setup": "Разовая привязка аккаунтов"
+  },
+  "flags": [
+    {
+      "name": "GMAIL_POLL_ENABLED",
+      "staging": true,
+      "group": "ingest",
+      "effect": "Опрос Gmail по Cron и разбор новых писем.",
+      "needs": "Google OAuth владельца"
+    },
+    {
+      "name": "GMAIL_PERSONAL_INGEST_ENABLED",
+      "staging": false,
+      "group": "ingest",
+      "effect": "Сохранение и разбор личных писем. В ASSISTANT_SCOPE=work не действует."
+    },
+    {
+      "name": "MAIL_INGEST_ENABLED",
+      "staging": false,
+      "group": "ingest",
+      "effect": "Старый мост приёма писем из Apps Script (/ingest).",
+      "needs": "INGEST_SECRET"
+    },
+    {
+      "name": "OUTLOOK_POLL_ENABLED",
+      "staging": false,
+      "group": "ingest",
+      "effect": "Чтение рабочей почты через Microsoft Graph.",
+      "needs": "Одобренное компанией приложение Entra ID и OAuth"
+    },
+    {
+      "name": "TELEGRAM_MENTIONS_ENABLED",
+      "staging": true,
+      "group": "ingest",
+      "effect": "Приём сообщений из выбранных Telegram-чатов от локального слушателя.",
+      "needs": "TELEGRAM_MENTION_INGEST_SECRET, списки чатов, миграция 0006"
+    },
+    {
+      "name": "SLP_NOTICE_INGEST_ENABLED",
+      "staging": null,
+      "group": "ingest",
+      "effect": "Приём уведомлений SLP о расписаниях на проверку (только ID, статус, канал).",
+      "needs": "SLP_NOTICE_SECRET"
+    },
+    {
+      "name": "OUTLOOK_AI_ENABLED",
+      "staging": true,
+      "group": "external_ai",
+      "effect": "Разрешает передавать текст рабочих писем в Groq. В режиме work без него письма идут только на ручной разбор.",
+      "needs": "Разрешение компании на обработку рабочих данных внешней моделью",
+      "note": "В wrangler.jsonc включено, а docs/WORK_ONLY.md и STAGING_STATUS.md описывают как выключенное. Нужно решение владельца."
+    },
+    {
+      "name": "TELEGRAM_MENTIONS_AI_ENABLED",
+      "staging": true,
+      "group": "external_ai",
+      "effect": "Разрешает передавать текст сообщений из рабочих Telegram-чатов в Groq.",
+      "needs": "Разрешение компании на обработку рабочих данных внешней моделью",
+      "note": "В wrangler.jsonc включено, а docs/WORK_ONLY.md и STAGING_STATUS.md описывают как выключенное. Нужно решение владельца."
+    },
+    {
+      "name": "TASK_CONVERSATION_ENABLED",
+      "staging": true,
+      "group": "external_ai",
+      "effect": "Диалог с ботом: текст, который владелец пишет боту, уходит в Groq для распознавания намерения."
+    },
+    {
+      "name": "TASK_VOICE_ENABLED",
+      "staging": true,
+      "group": "external_ai",
+      "effect": "Голосовые владельца: аудио уходит в Groq Whisper, файл не сохраняется."
+    },
+    {
+      "name": "GMAIL_THREAD_CONTEXT_ENABLED",
+      "staging": false,
+      "group": "external_ai",
+      "effect": "Добавляет последние письма цепочки в контекст при подготовке черновика ответа."
+    },
+    {
+      "name": "WORKER_EMAIL_NOTIFICATIONS",
+      "staging": true,
+      "group": "notify",
+      "effect": "Уведомления в Telegram о рабочих письмах, требующих действия.",
+      "needs": "Не должно дублировать уведомления Apps Script до переключения webhook",
+      "note": "В wrangler.jsonc включено, а docs/WORK_ONLY.md и STAGING_STATUS.md описывают как выключенное. Нужно решение владельца."
+    },
+    {
+      "name": "WORKER_EMAIL_WORKER_CALLBACKS_ENABLED",
+      "staging": true,
+      "group": "notify",
+      "effect": "Кнопки в уведомлениях о письмах. Работают только когда webhook бота указывает на Worker.",
+      "needs": "Переключение Telegram webhook на Worker"
+    },
+    {
+      "name": "TELEGRAM_MENTION_NOTIFICATIONS_ENABLED",
+      "staging": true,
+      "group": "notify",
+      "effect": "Уведомления о новых сообщениях из рабочих Telegram-чатов."
+    },
+    {
+      "name": "TELEGRAM_MENTION_WORKER_CALLBACKS_ENABLED",
+      "staging": true,
+      "group": "notify",
+      "effect": "Кнопки в уведомлениях о Telegram-сообщениях. Работают только когда webhook указывает на Worker.",
+      "needs": "Переключение Telegram webhook на Worker",
+      "note": "STAGING_STATUS.md описывает как выключенное до переключения webhook. Нужно решение владельца."
+    },
+    {
+      "name": "SLP_NOTICE_NOTIFICATIONS",
+      "staging": null,
+      "group": "notify",
+      "effect": "Уведомления в Telegram по записям SLP на проверку.",
+      "needs": "SLP_NOTICE_INGEST_ENABLED"
+    },
+    {
+      "name": "REMINDERS_ENABLED",
+      "staging": true,
+      "group": "notify",
+      "effect": "Напоминания о сроках задач по Cron.",
+      "needs": "Миграция 0002; после подключения действующего бота",
+      "note": "В wrangler.jsonc включено, а docs/WORK_ONLY.md и STAGING_STATUS.md описывают как выключенное. Нужно решение владельца."
+    },
+    {
+      "name": "DAILY_BRIEF_ENABLED",
+      "staging": false,
+      "group": "notify",
+      "effect": "Утренняя сводка почты, задач и календаря."
+    },
+    {
+      "name": "REPLY_PREVIEWS_ENABLED",
+      "staging": false,
+      "group": "outbound",
+      "effect": "Локальные черновики ответов с предпросмотром и редактированием.",
+      "needs": "Миграция 0003"
+    },
+    {
+      "name": "GMAIL_DRAFTS_ENABLED",
+      "staging": false,
+      "group": "outbound",
+      "effect": "Создание настоящего черновика в Gmail.",
+      "needs": "Миграция 0004, OAuth с gmail.compose"
+    },
+    {
+      "name": "GMAIL_SEND_ENABLED",
+      "staging": false,
+      "group": "outbound",
+      "effect": "Отправка рабочего ответа из Gmail после отдельного подтверждения.",
+      "needs": "Корпоративный send-as alias и явное разрешение"
+    },
+    {
+      "name": "PERSONAL_GMAIL_SEND_ENABLED",
+      "staging": false,
+      "group": "outbound",
+      "effect": "Отправка писем с личного Gmail после подтверждения. В ASSISTANT_SCOPE=work не действует."
+    },
+    {
+      "name": "WORK_OUTLOOK_SEND_ENABLED",
+      "staging": false,
+      "group": "outbound",
+      "effect": "Отправка рабочих писем через Outlook после подтверждения.",
+      "needs": "Разрешение компании, Mail.Send"
+    },
+    {
+      "name": "TELEGRAM_RELAY_ENABLED",
+      "staging": false,
+      "group": "outbound",
+      "effect": "Сообщения контактам от имени бота по одноразовым приглашениям."
+    },
+    {
+      "name": "OUTLOOK_CALENDAR_READ_ENABLED",
+      "staging": false,
+      "group": "calendar",
+      "effect": "Чтение рабочего календаря Microsoft 365.",
+      "needs": "Разрешение компании, Calendars.ReadWrite"
+    },
+    {
+      "name": "OUTLOOK_CALENDAR_WRITE_ENABLED",
+      "staging": false,
+      "group": "calendar",
+      "effect": "Создание встреч в рабочем календаре после подтверждения.",
+      "needs": "Разрешение компании, Calendars.ReadWrite"
+    },
+    {
+      "name": "GOOGLE_CALENDAR_ENABLED",
+      "staging": false,
+      "group": "calendar",
+      "effect": "Личный Google Calendar. В ASSISTANT_SCOPE=work не действует.",
+      "needs": "Отдельное согласие Google"
+    },
+    {
+      "name": "GOOGLE_OAUTH_SETUP_ENABLED",
+      "staging": false,
+      "group": "setup",
+      "effect": "Разовый вход Google для привязки Gmail. Выключать сразу после привязки."
+    },
+    {
+      "name": "GOOGLE_CALENDAR_SETUP_ENABLED",
+      "staging": false,
+      "group": "setup",
+      "effect": "Разовый вход Google для привязки календаря. Выключать сразу после привязки."
+    },
+    {
+      "name": "OUTLOOK_SETUP_ENABLED",
+      "staging": false,
+      "group": "setup",
+      "effect": "Разовый вход Microsoft для привязки Outlook. Выключать сразу после привязки.",
+      "needs": "MS_CLIENT_ID, MS_CLIENT_SECRET"
+    }
+  ]
+}

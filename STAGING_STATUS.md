@@ -2,6 +2,8 @@
 
 Existing Google Apps Script bot remains the only live Telegram bot. No existing Telegram webhook has been changed.
 
+> **Флаги.** Фактические значения всех переключателей собраны в [docs/FLAGS.md](docs/FLAGS.md): файл создаётся из `config/flags.json` и сверяется тестом с `wrangler.jsonc`. Если текст ниже расходится с этой таблицей, верна таблица.
+
 ## Deployed infrastructure
 - Private GitHub repo: `skoomaholic-art/Personal-Assistant`, Worker build branch: `cloudflare-staging`.
 - Test Worker: `https://rahal-mamut-staging.alexandr-petrossov.workers.dev/`.
@@ -88,3 +90,12 @@ Old Google Sheets tasks and Telegram chat history have not been bulk-migrated. N
 - Рецензирование SLP попадает в существующую таблицу задач и D1-журнал. Очередь и `notification_events` обеспечивают подавление повторной Telegram-доставки. Существующий Telegram webhook НЕ переключён.
 - Выключено до настройки: `SLP_NOTICE_INGEST_ENABLED`, `SLP_NOTICE_NOTIFICATIONS`. Секрет `SLP_NOTICE_SECRET` должен совпадать с `SPORT_ASSISTANT_NOTICE_SECRET` на хосте SLP. Не вносить секрет в Git. Не включать работающие кнопки Worker, пока Telegram webhook остаётся в Apps Script.
 - Статус: код в ветке `cloudflare-staging`, публикация, доступность SLP, реальная доставка и отсутствие дублей между двумя независимыми Gmail-сканерами пока НЕ подтверждены. ChatGPT hourly automation является отдельной функцией ChatGPT, в API Worker не встроена.
+
+## 2026-10-07 - Тесты, деплой после тестов, реестр флагов (код, не живой релиз)
+
+- Исправлена ошибка в `isWorkGmailMessage` (`src/gmail.js`): регулярные выражения для `Authentication-Results` были экранированы дважды и не совпадали ни с одним реальным заголовком, поэтому ни одно письмо не распознавалось как рабочее. Теперь принимается точное совпадение домена в `header.d=`, в `header.i=@домен` (так пишет Gmail) или в `smtp.mailfrom` при `dkim=pass`/`spf=pass`. Требование точного отправителя `WORK_EMAIL` не менялось.
+- Следствие: после публикации подтверждённые пересылки с рабочего адреса начнут распознаваться как рабочие. При текущих значениях `OUTLOOK_AI_ENABLED=true` и `WORKER_EMAIL_NOTIFICATIONS=true` их текст будет передаваться в Groq, а в Telegram пойдут уведомления. Значения этих флагов нужно подтвердить до публикации, см. раздел «Требует решения» в `docs/FLAGS.md`.
+- Тесты приведены в соответствие с кодом: 70 из 70 проходят (было 48 из 64). Тестовые базы применяют все миграции, а не только 0001.
+- `npm run check` проверяет все модули. Workflow `Tests` запускается на pull request и push; `deploy-staging` публикует Worker только после успешных тестов.
+- Добавлены `config/flags.json`, `docs/FLAGS.md` и `test/flags.test.js`: реестр переключателей, который сверяется с кодом и `wrangler.jsonc`. Значения флагов в `wrangler.jsonc` не менялись.
+- Не проверено вживую: формат `Authentication-Results` в реальных пересланных письмах, публикация Worker, запуск workflow в GitHub Actions.
