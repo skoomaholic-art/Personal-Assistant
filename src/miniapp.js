@@ -38,6 +38,7 @@ async function authorized(request,env){
 const html=String.raw`<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Персональный помощник</title>
+<link rel="icon" type="image/png" href="/favicon.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{color-scheme:dark;--bg:#0b1510;--card:#18251d;--line:#30503b;--text:#e7f4eb;--sub:#a5bfb0;--accent:#75e5a5}
@@ -51,7 +52,7 @@ button.save{background:var(--accent);color:#07190e;font-weight:700;border:0}
 nav{position:fixed;left:0;right:0;bottom:0;background:#13241a;border-top:1px solid var(--line);display:flex;justify-content:space-around;flex-wrap:wrap;padding:8px 2px max(8px,env(safe-area-inset-bottom))}
 nav button{border:0;background:transparent;font-size:12px;padding:7px 2px}nav button[aria-current=true]{color:var(--accent)}
 .hidden{display:none}.body{white-space:pre-wrap;overflow-wrap:anywhere}.actions{display:flex;flex-wrap:wrap}
-</style></head><body><main><h1>Персональный помощник</h1>
+</style></head><body><main><img src="/brand/logo.webp" alt="Skoomaholic Dev" width="180" height="135" style="display:block;margin:4px auto 6px;max-width:45%;height:auto"><h1>Персональный помощник</h1>
 <p>Рабочие задачи, Outlook, встречи и информация в одном месте.</p><div id="notice"></div>
 <section id="home"></section><section id="tasks" class="hidden"></section><section id="progress" class="hidden"></section><section id="done" class="hidden"></section>
 <section id="mail" class="hidden"></section><section id="news" class="hidden"></section><section id="review" class="hidden"></section>
@@ -227,7 +228,7 @@ export async function miniApp(request,env){
   if(request.method==='GET'&&path==='/app')return new Response(html,{
     headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store',
       'x-content-type-options':'nosniff','content-security-policy':
-      "default-src 'none'; script-src 'unsafe-inline' https://telegram.org; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors https://web.telegram.org"}
+      "default-src 'none'; script-src 'unsafe-inline' https://telegram.org; style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors https://web.telegram.org"}
   });
   if(!path.startsWith('/app/api/'))return json({error:'not_found'},404);
   if(!await authorized(request,env))return json({error:'owner_auth_required'},401);
