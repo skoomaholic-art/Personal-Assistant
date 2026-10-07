@@ -66,7 +66,8 @@ test('the recorded failure never contains prompt text, model output or keys',asy
     code:'json_validate_failed',failed_generation:'SECRET-MODEL-OUTPUT about the owner'}})));
   await recordAiFailure({DB},'intent',error);
   const saved=DB.last();
-  assert.deepEqual(saved,{kind:'request',where:'intent',status:400,code:'json_validate_failed',detail:'Failed to validate JSON'});
+  assert.deepEqual(saved,{kind:'request',where:'intent',status:400,code:'json_validate_failed',
+    detail:'Failed to validate JSON [generated 35 chars, cut off]'});
   assert.equal(JSON.stringify(saved).includes('SECRET-MODEL-OUTPUT'),false);
   // A broken database must not turn a readable failure into a crash.
   await recordAiFailure({DB:{prepare(){throw Error('down');}}},'intent',error);

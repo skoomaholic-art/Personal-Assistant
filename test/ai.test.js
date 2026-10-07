@@ -102,3 +102,32 @@ test('an unusable structured reply moves on to the next provider',async()=>{
     assert.equal(calls.length,2);
   }
 });
+
+test('a strict-schema rejection is retried once in plain JSON mode on the same provider',async()=>{
+  const rejected=()=>new Response(JSON.stringify({error:{code:'json_validate_failed',
+    message:'Failed to validate JSON',failed_generation:'{"intent":"chat","reply":"SECRET half'}}),{status:400});
+  let calls=mock({'api.groq.com':sent=>sent.response_format.type==='json_schema'?rejected():
+    ok('{"intent":"chat","reply":"Привет!"}')});
+  const result=await chatCompletion({GROQ_API_KEY:'g'},request({schema,accept:o=>o.intent==='chat'}));
+  assert.deepEqual(result,{value:{intent:'chat',reply:'Привет!'},provider:'groq'});
+  assert.deepEqual(calls.map(c=>c.sent.response_format.type),['json_schema','json_object']);
+  assert.match(calls[1].sent.messages[0].content,/intent: chat\|tasks; reply: string$/);
+  assert.equal(calls[1].sent.reasoning_effort,'low');
+
+  // Rejected in both modes: reported once, with the shape of the output but not its text.
+  calls=mock({'api.groq.com':rejected});
+  await assert.rejects(chatCompletion({GROQ_API_KEY:'g'},request({schema})),error=>{
+    assert.deepEqual([error.kind,error.code],['request','json_validate_failed']);
+    assert.match(error.detail,/\[generated 37 chars, cut off\]$/);
+    assert.equal(error.detail.includes('SECRET'),false);
+    return true;
+  });
+  assert.equal(calls.length,2);
+  // Other rejections, and providers without strict mode, are not retried.
+  calls=mock({'api.groq.com':()=>fail(400,'model_not_found')});
+  await assert.rejects(chatCompletion({GROQ_API_KEY:'g'},request({schema})));
+  assert.equal(calls.length,1);
+  calls=mock({'api.cerebras.ai':rejected});
+  await assert.rejects(chatCompletion({CEREBRAS_API_KEY:'c'},request({schema})));
+  assert.equal(calls.length,1);
+});

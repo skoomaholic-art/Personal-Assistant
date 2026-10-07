@@ -51,6 +51,19 @@ function body(provider,request){
   return out;
 }
 async function callOne(provider,request){
+  try{return await send(provider,request);}
+  catch(error){
+    // A strict schema can reject the model's own output. Ask once more in
+    // plain JSON mode and validate the reply here instead.
+    if(provider.strict&&request.schema&&error instanceof AiError&&
+       error.kind==='request'&&error.code==='json_validate_failed'){
+      console.log(JSON.stringify({event:'ai_strict_schema_retry',provider:provider.name}));
+      return send({...provider,strict:false},request);
+    }
+    throw error;
+  }
+}
+async function send(provider,request){
   const response=await fetch(provider.base+'/chat/completions',{
     method:'POST',
     headers:{authorization:'Bearer '+provider.key,'content-type':'application/json'},
