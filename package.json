@@ -1,0 +1,15 @@
+{
+  "name": "rahal-mamut-cloud",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Staged Cloudflare Workers migration for Персональный помощник",
+  "scripts": {
+    "test": "node --test",
+    "check": "node scripts/check-syntax.mjs",
+    "flags:doc": "node scripts/flags-doc.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

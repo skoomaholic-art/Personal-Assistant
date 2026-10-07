@@ -1,0 +1,77 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rahal-mamut-staging",
+  "account_id": "1ddef0e5e228aa4a8e748b50e1a86bfb",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-27",
+  "keep_vars": true,
+  "vars": {
+    "GROQ_MODEL": "openai/gpt-oss-20b",
+    "WORK_DOMAIN": "fmedia.kz",
+    "TZ_OFFSET_MINUTES": "300",
+    "MAIL_INGEST_ENABLED": "false",
+    "WORKER_EMAIL_NOTIFICATIONS": "true",
+    "WORKER_EMAIL_WORKER_CALLBACKS_ENABLED": "true",
+    "WORK_EMAIL": "alexandr.petrossov@fmedia.kz",
+    "GMAIL_POLL_ENABLED": "true",
+    "REMINDERS_ENABLED": "true",
+    "REPLY_PREVIEWS_ENABLED": "false",
+    "GMAIL_THREAD_CONTEXT_ENABLED": "false",
+    "GOOGLE_OAUTH_REDIRECT_URI": "https://rahal-mamut-staging.alexandr-petrossov.workers.dev/oauth/google/callback",
+    "GOOGLE_OAUTH_SETUP_ENABLED": "true",
+    "GMAIL_NONWORK_INDEX_ENABLED": "true",
+    "GMAIL_DRAFTS_ENABLED": "false",
+    "GMAIL_SEND_ENABLED": "false",
+    "TASK_CONVERSATION_ENABLED": "true",
+    "TASK_VOICE_ENABLED": "true",
+    "GMAIL_PERSONAL_INGEST_ENABLED": "false",
+    "PERSONAL_GMAIL_SEND_ENABLED": "false",
+    "GOOGLE_CALENDAR_SETUP_ENABLED": "false",
+    "GOOGLE_CALENDAR_ENABLED": "false",
+    "TELEGRAM_RELAY_ENABLED": "false",
+    "DAILY_BRIEF_ENABLED": "false",
+    "OUTLOOK_SETUP_ENABLED": "false",
+    "OUTLOOK_POLL_ENABLED": "false",
+    "MINIAPP_URL": "https://rahal-mamut-staging.alexandr-petrossov.workers.dev/app",
+    "OUTLOOK_CALENDAR_READ_ENABLED": "false",
+    "OUTLOOK_CALENDAR_WRITE_ENABLED": "false",
+    "OUTLOOK_AI_ENABLED": "true",
+    "ASSISTANT_SCOPE": "work",
+    "WORK_OUTLOOK_SEND_ENABLED": "false",
+    "TELEGRAM_MENTIONS_ENABLED": "true",
+    "TELEGRAM_MENTION_NOTIFICATIONS_ENABLED": "true",
+    "TELEGRAM_MENTIONS_AI_ENABLED": "true",
+    "TELEGRAM_MENTION_WORKER_CALLBACKS_ENABLED": "true",
+    "TELEGRAM_CUTOVER_ENABLED": "true"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rahal-mamut-staging",
+      "database_id": "0b294974-73c7-40b1-93c3-dfb6dcb797e7",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "JOBS",
+        "queue": "rahal-mamut-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "rahal-mamut-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 4,
+        "dead_letter_queue": "rahal-mamut-dead-letter"
+      }
+    ]
+  },
+  "triggers": {
+    "crons": [
+      "*/5 * * * *"
+    ]
+  }
+}
