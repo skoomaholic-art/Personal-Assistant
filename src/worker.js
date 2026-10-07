@@ -1,5 +1,5 @@
 import {
-  commandOf, getChatId, isQuickAction, hasValidSecret, safeText,
+  commandOf, getChatId, isQuickAction, hasValidSecret, safeText, upgradeLegacyCallback,
   menuMarkup, moreMarkup, backMarkup, emailMarkup, taskMarkup, normalizePriority,
   isEmailObject, localDayBounds
 } from './router.js';
@@ -23,6 +23,7 @@ import {ingestTelegramMention,processTelegramMention,telegramMentionDetails,late
 import {connectionStatus} from './admin.js';
 import {importLegacyTasks} from './legacy-import.js';
 import {telegramCutoverReadiness} from './telegram-status.js';
+import {telegramCutover} from './telegram-cutover.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {transcribeTelegramVoice} from './voice.js';
 import {storeSourceEvent,taskHistory,claimNotification,finishNotification} from './task-store.js';
@@ -69,6 +70,9 @@ export async function webhook(request, env) {
     if (input.length > 64000) return ok({error:'too_large'},413);
     update = JSON.parse(input);
   } catch { return ok({error:'bad_json'},400); }
+  // Buttons under messages sent by the legacy Apps Script bot keep working.
+  if(update?.callback_query&&typeof update.callback_query.data==='string')
+    update.callback_query.data=upgradeLegacyCallback(update.callback_query.data);
   const chatId = getChatId(update);
   if (!chatId) return ok({error:'forbidden'},403);
   if (!Number.isSafeInteger(update.update_id)) return ok({error:'missing_update_id'},400);
@@ -270,6 +274,11 @@ async function prepareAnswer(update, env) {
       env.DB.prepare('DELETE FROM states WHERE chat_id=?').bind(chatId)
     ]);
     return {text:'✅ Контекст очищен.',reply_markup:backMarkup()};
+  }
+  if(action==='legacy:stale'){
+    await clearState(env,chatId);
+    return {text:'Эта кнопка осталась от старой версии бота и больше не работает. Вот актуальное меню.',
+      reply_markup:menuMarkup(env.MINIAPP_URL||'')};
   }
   if(action==='more')return {text:'Другие разделы',reply_markup:moreMarkup()};
   if(['tasks','progress','done'].includes(action)){
@@ -710,6 +719,7 @@ export default {
     if(path==='/admin/connections') return connectionStatus(request,env);
     if(path==='/admin/import/tasks') return importLegacyTasks(request,env);
     if(path==='/admin/telegram/status') return telegramCutoverReadiness(request,env);
+    if(path==='/admin/telegram/cutover') return telegramCutover(request,env);
     if(path==='/app'||path.startsWith('/app/api/'))return miniApp(request,env);
     if(path==='/oauth/outlook/start')return startOutlookOAuth(request,env);
     if(path==='/oauth/outlook/callback')return completeOutlookOAuth(request,env);

@@ -34,8 +34,29 @@ export function getChatId(update) {
   const chat = update?.callback_query?.message?.chat ?? update?.message?.chat;
   return chat?.id == null ? null : String(chat.id);
 }
+// Callback identifiers of the legacy Apps Script bot. Its old messages stay in
+// the chat after cutover, so their buttons are mapped to the current actions.
+const LEGACY_EXACT={
+  open_menu:'menu',menu_important:'important',menu_today:'today',menu_week:'week',
+  menu_news:'news',menu_colleagues:'colleagues',menu_search:'search',
+  menu_mail:'mail:refresh',menu_reset:'reset',confirm_reset:'reset:yes',cancel_reset:'reset:no'
+};
+const LEGACY_PREFIX={
+  'task_done:':'task:done:','task_progress:':'task:progress:','task_view:':'task:view:',
+  'email_view:':'email:view:','email_task:':'email:task:','email_reply:':'email:reply:'
+};
+// Draft buttons share their names with the current version and are left alone;
+// an unknown legacy draft ID is simply reported as not found.
+const LEGACY_STALE=/^(?:attget:|email_atts:|refreshdraft:)/;
+export function upgradeLegacyCallback(data) {
+  const value=String(data??'');
+  if(Object.hasOwn(LEGACY_EXACT,value))return LEGACY_EXACT[value];
+  for(const [old,current] of Object.entries(LEGACY_PREFIX))
+    if(value.startsWith(old))return current+value.slice(old.length);
+  return LEGACY_STALE.test(value)?'legacy:stale':value;
+}
 export const QUICK_ACTIONS = new Set([
-  'menu','cancel','reset','reset:no','reset:yes','more','tasks','progress','done',
+  'legacy:stale','menu','cancel','reset','reset:no','reset:yes','more','tasks','progress','done',
   'report','review','important','colleagues','week','news','mail','newtask','search','voicehelp'
 ]);
 export function isQuickAction(action) {
