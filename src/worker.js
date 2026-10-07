@@ -27,6 +27,7 @@ import {telegramCutover} from './telegram-cutover.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {chatCompletion,aiConfigured} from './ai.js';
 import {segmentOverview,segmentView} from './segments.js';
+import {brandAsset} from './brand.js';
 import {recordAiFailure,aiFailureText} from './ai-errors.js';
 import {transcribeTelegramVoice} from './voice.js';
 import {storeSourceEvent,taskHistory,claimNotification,finishNotification} from './task-store.js';
@@ -705,6 +706,8 @@ async function processEmail(job,env) {
 export default {
   async fetch(request,env) {
     const path=new URL(request.url).pathname;
+    const asset=brandAsset(request);
+    if(asset)return asset;
     if(path==='/admin/connections') return connectionStatus(request,env);
     if(path==='/admin/import/tasks') return importLegacyTasks(request,env);
     if(path==='/admin/telegram/status') return telegramCutoverReadiness(request,env);

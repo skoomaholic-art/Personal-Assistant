@@ -1,4 +1,5 @@
 import {ownerAuthorized} from './google-oauth.js';
+import {BRAND_HEAD,BRAND_LOGO} from './brand.js';
 
 // Owner-only, non-destructive import of the existing Apps Script Tasks worksheet.
 // No source rows are logged, sent to external AI, overwritten, or deleted.
@@ -8,7 +9,7 @@ const HEADERS={
   'x-content-type-options':'nosniff',
   // same-origin keeps the Origin header on our own form posts; no-referrer would null it.
   'referrer-policy':'same-origin',
-  'content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
+  'content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'none'"
 };
 const CHALLENGE={'www-authenticate':'Basic realm="Rahal Mamut data import", charset="UTF-8"'};
 const REQUIRED=['task_id','title','status','priority','email_id','description',
@@ -21,12 +22,12 @@ const title='Перенос задач из старого Рахал Мамут
 function page(body,status=200,challenge=false){
   return new Response('<!doctype html><html lang="ru"><meta charset="utf-8">'+
     '<meta name="viewport" content="width=device-width,initial-scale=1">'+
-    '<title>'+title+'</title><style>'+
+    '<title>'+title+'</title>'+BRAND_HEAD+'<style>'+
     'body{background:#101a14;color:#e9f5ed;font:16px/1.55 system-ui;padding:24px;max-width:740px;margin:auto}'+
     'section{background:#1b2b20;border:1px solid #42634d;border-radius:16px;padding:20px}'+
     'label{display:block;margin:18px 0}input[type=file]{display:block;margin:8px 0;max-width:100%}'+
     'button{padding:12px 18px;background:#88df9c;color:#102016;border:0;border-radius:9px;font-weight:700}'+
-    'a{color:#88df9c}</style><main><h1>'+title+'</h1><section>'+body+'</section></main></html>',
+    'a{color:#88df9c}</style><main>'+BRAND_LOGO+'<h1>'+title+'</h1><section>'+body+'</section></main></html>',
     {status,headers:{...HEADERS,...(challenge?CHALLENGE:{})}});
 }
 function invalid(message,status=422){
