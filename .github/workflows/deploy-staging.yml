@@ -9,7 +9,11 @@ concurrency:
   group: personal-assistant-cloudflare-staging
   cancel-in-progress: false
 jobs:
+  # The Worker is published only after the syntax check and the full test suite pass.
+  test:
+    uses: ./.github/workflows/ci.yml
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
