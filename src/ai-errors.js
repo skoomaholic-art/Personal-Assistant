@@ -25,6 +25,10 @@ export async function throwForResponse(response){
     const body=JSON.parse((await response.text()).slice(0,4000));
     code=body?.error?.code||body?.error?.type||'';
     detail=body?.error?.message||'';
+    // Shape of a rejected generation only (never its text): was it cut off?
+    const generated=body?.error?.failed_generation;
+    if(typeof generated==='string')
+      detail+=' [generated '+generated.length+' chars, '+(/\}\s*$/.test(generated)?'closed':'cut off')+']';
   }catch{/* keep the status only */}
   const retryAfter=Number(response.headers.get('retry-after'))||0;
   throw new AiError(kindOf(response.status),{status:response.status,code,detail,retryAfter});
