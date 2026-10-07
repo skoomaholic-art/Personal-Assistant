@@ -40,7 +40,9 @@ test('due reminders include upcoming and overdue, not done or distant tasks',()=
     {...task,task_id:'done',status:'DONE'},{...task,task_id:'far',due_iso:'2026-09-28T08:00:00Z'},
     {...task,task_id:'unscheduled',due_iso:''}];
   assert.deepEqual(dueReminderTasks(tasks,now).map(t=>t.task_id),['past','task123']);
-  assert.match(reminderText(tasks[1],now),/просрочена/);
+  assert.match(reminderText(tasks[1],now),/Срок прошёл/);
+  assert.match(reminderText(tasks[0],now),/Скоро дедлайн/);
+  assert.doesNotMatch(reminderText(tasks[0],now),/Срок прошёл/);
 });
 test('reminders are disabled by default without database or Telegram token',async()=>{
   global.fetch=()=>{throw Error('No external network expected')};

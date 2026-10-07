@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync} from 'node:fs';
 import {taskMenuAction,taskCallback,taskTalk,taskList,taskReport} from '../src/task-dialog.js';
 import {menuMarkup,commandOf} from '../src/router.js';
 
 class DB {
   constructor(){
     this.sqlite=new DatabaseSync(':memory:');
-    this.sqlite.exec(readFileSync(new URL('../migrations/0001_init.sql',import.meta.url),'utf8'));
+    for(const name of readdirSync(new URL('../migrations/',import.meta.url)).sort())
+      this.sqlite.exec(readFileSync(new URL('../migrations/'+name,import.meta.url),'utf8'));
   }
   prepare(sql){
     const stmt=this.sqlite.prepare(sql);
@@ -55,15 +56,17 @@ function groq(data){
   };
   return calls;
 }
-test('menu uses balanced short rows and task-related actions',()=>{
+test('menu uses short rows and task-related actions',()=>{
   const rows=menuMarkup().inline_keyboard;
-  assert.equal(rows.length,6);
-  assert.ok(rows.every(r=>r.length===2));
-  assert.deepEqual(new Set(rows.flat().map(x=>x.callback_data)).size,12);
-  assert.ok(rows.flat().every(x=>Buffer.byteLength(x.callback_data)<64));
+  // Long task-section labels get their own row; no row exceeds two buttons.
+  assert.ok(rows.length>=6&&rows.length<=8);
+  assert.ok(rows.every(r=>r.length>=1&&r.length<=2));
+  const actions=rows.flat().map(x=>x.callback_data);
+  assert.equal(new Set(actions).size,actions.length);
+  assert.ok(actions.every(x=>Buffer.byteLength(x)<64));
   for(const [text,action] of [
     ['/tasks','tasks'],['/report','report'],['/new','newtask'],
-    ['мои задачи','tasks'],['проверить почту','mail']
+    ['мои задачи','tasks'],['/mail','mail'],['проверить почту','mail:refresh']
   ])assert.equal(commandOf({message:{text}}),action);
 });
 test('owner gets proposal, confirms once, then sees task and report',async()=>{
@@ -83,7 +86,7 @@ test('owner gets proposal, confirms once, then sees task and report',async()=>{
     assert.match(duplicate.text,/Нет задачи/);
     assert.equal(DB.sqlite.prepare('SELECT COUNT(*) n FROM tasks').get().n,1);
     assert.match((await taskList(env)).text,/Подготовить презентацию/);
-    assert.match((await taskReport(env)).text,/Новые: 1/);
+    assert.match((await taskReport(env)).text,/Не в работе: 1\n🟡 В работе: 0\n✅ Выполнено: 0/);
   } finally {DB.close();}
 });
 test('asking details does not create a task until missing detail and confirmation',async()=>{
@@ -120,7 +123,7 @@ test('task deletion is a reversible soft-delete and requires explicit confirmati
     assert.match(saved.text,/удалена/);
     assert.equal(DB.sqlite.prepare("SELECT status FROM tasks WHERE task_id='manual:1'").get().status,'DELETED');
     assert.doesNotMatch((await taskList(env)).text,/Сдать отчёт/);
-    assert.match((await taskReport(env)).text,/Всего без удалённых: 0/);
+    assert.match((await taskReport(env)).text,/Не в работе: 0\n🟡 В работе: 0\n✅ Выполнено: 0/);
     assert.match((await taskCallback(env,'owner','task:action:yes',5)).text,/устарело/);
   }finally{DB.close();}
 });

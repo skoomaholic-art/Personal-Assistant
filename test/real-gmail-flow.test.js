@@ -46,7 +46,7 @@ class FakeD1 {
 const draftId='d'+'1'.repeat(32);
 const originalFetch=global.fetch;
 test.afterEach(()=>{global.fetch=originalFetch;});
-function setup({failSend=false}={}) {
+function setup({failSend=false,originalFrom='Alex <worker@work.example>'}={}) {
   const DB=new FakeD1();let create=0,send=0;
   const env={
     DB,WORK_EMAIL:'worker@work.example',WORK_DOMAIN:'work.example',
@@ -62,11 +62,15 @@ function setup({failSend=false}={}) {
     if(u.includes('/messages/a1b2c3d4'))
       return Response.json({id:'a1b2c3d4',threadId:'thread1111',
         internalDate:'1780000000000',payload:{mimeType:'text/plain',headers:[
-          {name:'From',value:'Colleague <colleague@vendor.example>'},
-          {name:'To',value:'worker@work.example'},
+          // Authenticated forward from the owner's corporate address; the
+          // original author is read from the preserved header block.
+          {name:'From',value:originalFrom},
+          {name:'To',value:'owner@personal.example'},
           {name:'Subject',value:'Обзор'},
-          {name:'Message-ID',value:'<mail@example.org>'}
-        ],body:{data:Buffer.from('Нужно ответить').toString('base64url')}}});
+          {name:'Message-ID',value:'<mail@example.org>'},
+          {name:'Authentication-Results',value:'mx.google.com; dkim=pass header.i=@work.example header.s=sel; '+
+            'spf=pass smtp.mailfrom=worker@work.example'}
+        ],body:{data:Buffer.from('From: Colleague <colleague@vendor.example>\nTo: worker@work.example\n\nНужно ответить').toString('base64url')}}});
     if(u.includes('/settings/sendAs'))
       return Response.json({sendAs:[{sendAsEmail:'worker@work.example',
         verificationStatus:'accepted',isDefault:false}]});
@@ -133,6 +137,14 @@ test('mail send remains disabled without distinct switch',async()=>{
     env.GMAIL_SEND_ENABLED='false';
     const answer=await confirmGmailSend(env,draftId,ready.preview_token);
     assert.match(answer.text,/выключена/);
+    assert.equal(counts().send,0);
+  } finally{DB.close();}
+});
+test('no Gmail draft is created for a source message without corporate provenance',async()=>{
+  const {DB,env,counts}=setup({originalFrom:'Colleague <colleague@vendor.example>'});
+  try{
+    await assert.rejects(prepareGmailDraft(env,draftId),/не распознано как рабочее/);
+    assert.equal(counts().create,0);
     assert.equal(counts().send,0);
   } finally{DB.close();}
 });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {commandOf,getChatId,hasValidSecret,safeText,localDayBounds,isEmailObject,menuMarkup} from '../src/router.js';
+import {commandOf,getChatId,hasValidSecret,safeText,localDayBounds,isEmailObject,menuMarkup,moreMarkup} from '../src/router.js';
 const message=text=>({message:{chat:{id:123},text}});
 test('menu and cancel override arbitrary input',()=>{
  assert.equal(commandOf(message('/menu')),'menu');
@@ -35,5 +35,20 @@ test('local day bounds honor UTC+5',()=>{
  assert.equal(b.end.toISOString(),'2026-09-28T19:00:00.000Z');
 });
 test('menu callback wiring',()=>{
- assert.ok(menuMarkup().inline_keyboard.flat().some(x=>x.callback_data==='today'));
+ const main=menuMarkup().inline_keyboard.flat(),more=moreMarkup().inline_keyboard.flat();
+ const actions=[...main,...more].map(x=>x.callback_data);
+ // Task lifecycle sections and the way back are always reachable.
+ for(const action of ['tasks','progress','done','news','report','newtask','mail','more'])
+   assert.ok(main.some(x=>x.callback_data===action),action);
+ for(const action of ['review','important','mail:refresh','menu'])
+   assert.ok(more.some(x=>x.callback_data===action),action);
+ assert.equal(new Set(actions).size,actions.length);
+ assert.ok(actions.every(x=>typeof x==='string'&&x&&Buffer.byteLength(x)<64));
+ // The Mini App button appears only for an https .../app URL; otherwise voice help.
+ assert.ok(main.some(x=>x.callback_data==='voicehelp'));
+ const withPanel=menuMarkup('https://assistant.example/app').inline_keyboard.flat();
+ assert.equal(withPanel.find(x=>x.web_app)?.web_app.url,'https://assistant.example/app');
+ assert.equal(menuMarkup('http://assistant.example/app').inline_keyboard.flat().some(x=>x.web_app),false);
+ // The daily view stays available as a command even though it left the menu.
+ assert.equal(commandOf(message('/today')),'today');
 });
