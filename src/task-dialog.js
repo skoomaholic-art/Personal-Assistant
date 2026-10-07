@@ -1,3 +1,4 @@
+import {throwForResponse,recordAiFailure,aiFailureText} from './ai-errors.js';
 import {backMarkup,taskMarkup,safeText,normalizePriority,localDayBounds} from './router.js';
 import {proposeCalendar,calendarAgenda,calendarFollowup} from './calendar.js';
 import {outlookAgenda} from './outlook.js';
@@ -300,7 +301,7 @@ async function interpret(env,chatId,text,context) {
     }),
     signal:AbortSignal.timeout(21000)
   });
-  if(!response.ok)throw new Error('Groq intent HTTP '+response.status);
+  if(!response.ok)await throwForResponse(response);
   const result=await response.json();
   const object=JSON.parse(String(result?.choices?.[0]?.message?.content||'{}'));
   if(!approved[object.intent])throw new Error('Groq intent absent');
@@ -689,10 +690,11 @@ export async function taskTalk(env,chatId,text,updateId,transcript='') {
   try {
     intent=await interpret(env,chatId,user,current?
       {mode:current.mode,previous:data,require_task_update:['TASK_INPUT','TASK_DRAFT','TASK_CLARIFY'].includes(current.mode)}:{});
-  } catch {
+  } catch(error) {
+    await recordAiFailure(env,'intent',error);
     if(current?.mode==='TASK_INPUT')intent={intent:'create_task',title:user,description:'',
       due_text:'',due_iso:'',priority:'средний',needs_details:false};
-    else return {text:'⚠️ Не получилось обработать сообщение. Повтори, пожалуйста. Ничего не изменено.',reply_markup:backMarkup()};
+    else return {text:aiFailureText(error),reply_markup:backMarkup()};
   }
   if(!intent)return null;
   if(workOnly(env)&&intent.work_scope==='personal')return workOnlyReply();
