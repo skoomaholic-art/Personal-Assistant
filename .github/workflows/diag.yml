@@ -1,0 +1,55 @@
+name: Diagnose Telegram silence (read-only)
+on:
+  push:
+    branches: [diag/telegram-silence]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Normalize Cloudflare API token
+        env:
+          RAW_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          let token = (process.env.RAW_CLOUDFLARE_API_TOKEN || '').trim();
+          if (token.startsWith('{')) {
+            let parsed;
+            try { parsed = JSON.parse(token); }
+            catch {
+              console.error('::error::Cloudflare secret contains invalid JSON. Copy just the API token value.');
+              process.exit(1);
+            }
+            const candidates = [
+              parsed.CLOUDFLARE_API_TOKEN, parsed.api_token, parsed.API_TOKEN,
+              parsed.token, parsed.value,
+              parsed.result?.CLOUDFLARE_API_TOKEN, parsed.result?.api_token,
+              parsed.result?.token, parsed.result?.value,
+              parsed.data?.token, parsed.data?.value
+            ];
+            token = candidates.find(value => typeof value === 'string' && value.trim()) || '';
+          }
+          token = token.replace(/^CLOUDFLARE_API_TOKEN\s*=\s*/i, '')
+            .replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();
+          if (!/^[a-zA-Z0-9._~-]{20,}$/.test(token)) {
+            console.error('::error::Cloudflare API token value is missing or invalid. The JSON must include a token or value field.');
+            process.exit(1);
+          }
+          process.stdout.write('::add-mask::' + token + '\n');
+          fs.appendFileSync(process.env.GITHUB_ENV, 'CLOUDFLARE_API_TOKEN=' + token + '\n');
+          NODE
+      - name: Read update and cutover status (no message content)
+        run: |
+          npx --yes wrangler@4 d1 execute rahal-mamut-staging --remote --json --config=wrangler.jsonc --command "SELECT 'update' AS kind, status AS a, CAST(attempts AS TEXT) AS b, CAST(strftime('%s','now')-created_at AS TEXT) AS age_s, CAST(length(COALESCE(response_json,'')) AS TEXT) AS d FROM (SELECT * FROM telegram_updates ORDER BY created_at DESC LIMIT 12) UNION ALL SELECT 'state', chat_id, mode, CAST(strftime('%s','now')-updated_at AS TEXT), '' FROM states WHERE chat_id LIKE 'system:%' UNION ALL SELECT 'count', 'telegram_updates', CAST(COUNT(*) AS TEXT), '', '' FROM telegram_updates UNION ALL SELECT 'count','history',CAST(COUNT(*) AS TEXT),CAST(strftime('%s','now')-COALESCE(MAX(created_at),0) AS TEXT),'' FROM history" > "$RUNNER_TEMP/diag.json" || { echo "::error::D1 query failed"; cat "$RUNNER_TEMP/diag.json" | head -c 600; exit 1; }
+          node <<'NODE'
+          const fs=require('node:fs');
+          const data=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/diag.json','utf8'));
+          const rows=(Array.isArray(data)?data:[data]).flatMap(x=>x.results||x.result||[]);
+          console.log('::notice title=diag::'+rows.map(r=>[r.kind,r.a,r.b,r.age_s,r.d].join('|')).join(' ; '));
+          NODE
