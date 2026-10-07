@@ -39,25 +39,27 @@ export function aiFailureText(error){
   const e=classifyAiError(error);
   const wait=e.retryAfter>0?' Попробуй через '+(e.retryAfter<90?Math.ceil(e.retryAfter)+' сек.':Math.ceil(e.retryAfter/60)+' мин.'):' Попробуй позже.';
   const reason={
-    rate_limit:'Лимит бесплатной модели Groq исчерпан.'+wait,
-    auth:'Groq не принял ключ доступа. Нужно обновить GROQ_API_KEY в Cloudflare.',
+    rate_limit:'Лимит бесплатной модели исчерпан.'+wait,
+    auth:'Сервис модели не принял ключ доступа. Нужно проверить ключи моделей в Cloudflare.',
     too_large:'Сообщение вместе с контекстом слишком большое для модели. Очисти чат командой /reset и повтори.',
-    provider:'Сервис модели Groq сейчас недоступен. Попробуй через пару минут.',
+    provider:'Сервис модели сейчас недоступен. Попробуй через пару минут.',
     request:'Модель отклонила запрос'+(e.code?' ('+e.code+')':'')+'. Это ошибка настройки, а не твоего сообщения.',
     timeout:'Модель не ответила вовремя. Повтори сообщение.',
     bad_output:'Модель вернула ответ, который не удалось разобрать. Повтори сообщение.',
     unknown:'Не получилось обработать сообщение. Повтори, пожалуйста.'
   }[e.kind];
-  return '⚠️ '+reason+' Ничего не изменено.';
+  // Name the service so the owner knows which key or quota to look at.
+  return '⚠️ '+reason+(e.provider?' Сервис: '+e.provider+'.':'')+' Ничего не изменено.';
 }
 export async function recordAiFailure(env,where,error){
   const e=classifyAiError(error);
-  console.error(JSON.stringify({event:'ai_call_failed',where,kind:e.kind,status:e.status,code:e.code}));
+  console.error(JSON.stringify({event:'ai_call_failed',where,kind:e.kind,status:e.status,code:e.code,provider:e.provider||''}));
   try{
     await env.DB.prepare(
       'INSERT INTO states(chat_id,mode,data,updated_at) VALUES(?,?,?,?) '+
       'ON CONFLICT(chat_id) DO UPDATE SET mode=excluded.mode,data=excluded.data,updated_at=excluded.updated_at'
-    ).bind(STATE_KEY,e.kind,JSON.stringify({where:clip(where,40),status:e.status,code:e.code,detail:e.detail}),
+    ).bind(STATE_KEY,e.kind,JSON.stringify({where:clip(where,40),status:e.status,code:e.code,detail:e.detail,
+      ...(e.provider?{provider:clip(e.provider,20)}:{}),...(e.attempts?{attempts:e.attempts}:{})}),
       Math.floor(Date.now()/1000)).run();
   }catch{/* diagnosis must never break the reply */}
   return e;

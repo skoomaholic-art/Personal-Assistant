@@ -25,6 +25,8 @@ import {importLegacyTasks} from './legacy-import.js';
 import {telegramCutoverReadiness} from './telegram-status.js';
 import {telegramCutover} from './telegram-cutover.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
+import {chatCompletion,aiConfigured} from './ai.js';
+import {recordAiFailure,aiFailureText} from './ai-errors.js';
 import {transcribeTelegramVoice} from './voice.js';
 import {storeSourceEvent,taskHistory,claimNotification,finishNotification} from './task-store.js';
 import {ingestSLPNotice} from './slp-integration.js';
@@ -582,34 +584,27 @@ async function prepareAnswer(update, env) {
 async function groqChat(env,chatId,userText,updateId) {
   if(workOnly(env)&&env.OUTLOOK_AI_ENABLED!=='true')
     return {text:'В рабочем режиме внешний AI-анализ пока выключен. Открой задачи через меню или напиши «Добавь задачу: ...».',reply_markup:backMarkup()};
-  if (!env.GROQ_API_KEY) return {text:'AI пока не настроен. Меню и сохранённые задачи доступны.',reply_markup:backMarkup()};
+  if (!aiConfigured(env)) return {text:'AI пока не настроен. Меню и сохранённые задачи доступны.',reply_markup:backMarkup()};
   const start=Date.now();
   const [hist,tasks]=await env.DB.batch([
-    env.DB.prepare('SELECT role,content FROM history WHERE chat_id=? ORDER BY id DESC LIMIT 10').bind(chatId),
+    env.DB.prepare('SELECT role,content FROM history WHERE chat_id=? ORDER BY id DESC LIMIT 6').bind(chatId),
     env.DB.prepare("SELECT title,due_text FROM tasks WHERE status!='DONE' ORDER BY due_iso='' DESC,due_iso ASC LIMIT 3")
   ]);
   const system='Ты Персональный помощник, рабочий помощник Александра. Отвечай по-русски, кратко и по существу. Не придумывай факты и не утверждай, что совершил действие, если оно не выполнено. Не цитируй секреты. Текущие задачи: '+tasks.results.map(t=>t.title+' ('+(t.due_text||'без срока')+')').join('; ');
-  const messages=[{role:'system',content:system},...hist.results.reverse().map(h=>({role:h.role,content:h.content})),{role:'user',content:safeText(userText,2400)}];
-  let res;
+  const messages=[{role:'system',content:system},...hist.results.reverse().map(h=>({role:h.role,content:safeText(h.content,600)})),{role:'user',content:safeText(userText,2400)}];
+  let reply;
   try {
-    res=await fetch('https://api.groq.com/openai/v1/chat/completions',{
-      method:'POST',headers:{Authorization:'Bearer '+env.GROQ_API_KEY,'content-type':'application/json'},
-      body:JSON.stringify({model:env.GROQ_MODEL||'openai/gpt-oss-20b',temperature:0.4,max_completion_tokens:550,messages}),
-      signal:AbortSignal.timeout(15000)
-    });
+    reply=val((await chatCompletion(env,{temperature:0.4,maxTokens:550,timeoutMs:15000,messages})).value,3800);
   } catch (err) {
-    failLog('groq_network_or_timeout',err);
-    return {text:'⚠️ AI не ответил вовремя. Попробуй ещё раз. Меню и задачи доступны.',reply_markup:backMarkup()};
+    await recordAiFailure(env,'chat',err);
+    return {text:aiFailureText(err),reply_markup:backMarkup()};
   }
-  if (!res.ok) { failLog('groq_http_'+res.status,new Error('AI unavailable')); return {text:'⚠️ AI сейчас не отвечает. Попробуй ещё раз чуть позже.',reply_markup:backMarkup()}; }
-  const data=await res.json();
-  const reply=val(data?.choices?.[0]?.message?.content?.trim()||'Не получилось сформировать ответ.',3800);
   await env.DB.batch([
     env.DB.prepare('INSERT OR IGNORE INTO history(chat_id,event_id,role,content,created_at) VALUES(?,?,?,?,?)').bind(chatId,updateId+':u','user',safeText(userText,2400),nowSeconds()),
     env.DB.prepare('INSERT OR IGNORE INTO history(chat_id,event_id,role,content,created_at) VALUES(?,?,?,?,?)').bind(chatId,updateId+':a','assistant',reply,nowSeconds()),
     env.DB.prepare('DELETE FROM history WHERE chat_id=? AND id NOT IN (SELECT id FROM history WHERE chat_id=? ORDER BY id DESC LIMIT 12)').bind(chatId,chatId)
   ]);
-  console.log(JSON.stringify({event:'groq_chat_timing',ms:Date.now()-start}));
+  console.log(JSON.stringify({event:'ai_chat_timing',ms:Date.now()-start}));
   return {text:reply,reply_markup:backMarkup()};
 }
 

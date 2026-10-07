@@ -37,7 +37,7 @@ test('provider responses are classified by status with code and retry delay',asy
     {'retry-after':'740'})));
   assert.ok(limited instanceof AiError);
   assert.deepEqual([limited.kind,limited.status,limited.code,limited.retryAfter],['rate_limit',429,'rate_limit_exceeded',740]);
-  assert.match(aiFailureText(limited),/Лимит бесплатной модели Groq исчерпан\. Попробуй через 13 мин\./);
+  assert.match(aiFailureText(limited),/Лимит бесплатной модели исчерпан\. Попробуй через 13 мин\./);
   assert.equal((await caught(throwForResponse(failure(401,{error:{message:'Invalid API Key',code:'invalid_api_key'}})))).kind,'auth');
   assert.equal((await caught(throwForResponse(failure(403,{})))).kind,'auth');
   assert.equal((await caught(throwForResponse(failure(503,{})))).kind,'provider');
@@ -80,8 +80,10 @@ test('the dialogue reports the real reason and records it',async()=>{
     return failure(429,{error:{message:'Rate limit reached',code:'rate_limit_exceeded'}},{'retry-after':'30'});
   };
   const answer=await taskTalk(env,'123','Привет',1);
-  assert.match(answer.text,/Лимит бесплатной модели Groq исчерпан\. Попробуй через 30 сек\. Ничего не изменено\./);
+  assert.match(answer.text,/Лимит бесплатной модели исчерпан\. Попробуй через 30 сек\. Сервис: groq\. Ничего не изменено\./);
   assert.equal(answer.text.includes('fake-groq-key'),false);
   assert.deepEqual([DB.last().kind,DB.last().status,DB.last().code],['rate_limit',429,'rate_limit_exceeded']);
+  assert.equal(DB.last().provider,'groq');
+  assert.deepEqual(DB.last().attempts,[{provider:'groq',kind:'rate_limit',status:429,code:'rate_limit_exceeded'}]);
   assert.equal(DB.sqlite.prepare('SELECT COUNT(*) AS n FROM tasks').get().n,0);
 });
