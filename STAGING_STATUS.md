@@ -99,3 +99,11 @@ Old Google Sheets tasks and Telegram chat history have not been bulk-migrated. N
 - `npm run check` проверяет все модули. Workflow `Tests` запускается на pull request и push; `deploy-staging` публикует Worker только после успешных тестов.
 - Добавлены `config/flags.json`, `docs/FLAGS.md` и `test/flags.test.js`: реестр переключателей, который сверяется с кодом и `wrangler.jsonc`. Значения флагов в `wrangler.jsonc` не менялись.
 - Не проверено вживую: формат `Authentication-Results` в реальных пересланных письмах, публикация Worker, запуск workflow в GitHub Actions.
+
+## 2026-10-07 - Подготовка переключения webhook (код, переключение НЕ выполнено)
+
+- Добавлена страница владельца `/admin/telegram/cutover` (`src/telegram-cutover.js`): показывает текущую цель webhook, по явному подтверждению переключает существующего бота на Worker и умеет откатить на сохранённый адрес Apps Script. Защищена `SETUP_PASSWORD`, проверкой источника формы и флагом `TELEGRAM_CUTOVER_ENABLED`.
+- Кнопки под старыми сообщениями Apps Script переводятся в действия новой версии (`upgradeLegacyCallback` в `src/router.js`); устаревшие отвечают подсказкой и меню.
+- Порядок действий и откат описаны в `docs/CUTOVER.md`.
+- Webhook по-прежнему принадлежит Apps Script. Задачи из Google Sheets не перенесены. Страница проверена только синтетическими тестами с имитацией Telegram API.
+

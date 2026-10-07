@@ -71,3 +71,4 @@
 | `GOOGLE_OAUTH_SETUP_ENABLED` | выключен | Разовый вход Google для привязки Gmail. Выключать сразу после привязки. | - |
 | `GOOGLE_CALENDAR_SETUP_ENABLED` | выключен | Разовый вход Google для привязки календаря. Выключать сразу после привязки. | - |
 | `OUTLOOK_SETUP_ENABLED` | выключен | Разовый вход Microsoft для привязки Outlook. Выключать сразу после привязки. | MS_CLIENT_ID, MS_CLIENT_SECRET |
+| `TELEGRAM_CUTOVER_ENABLED` | включён | Страница владельца /admin/telegram/cutover: переключение существующего бота на Worker и откат на Apps Script. | SETUP_PASSWORD; выключить после успешного переключения и проверки |
