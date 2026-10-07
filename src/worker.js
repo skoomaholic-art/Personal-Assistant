@@ -26,6 +26,7 @@ import {telegramCutoverReadiness} from './telegram-status.js';
 import {telegramCutover} from './telegram-cutover.js';
 import {taskMenuAction,taskCallback,taskTalk} from './task-dialog.js';
 import {chatCompletion,aiConfigured} from './ai.js';
+import {segmentOverview,segmentView} from './segments.js';
 import {recordAiFailure,aiFailureText} from './ai-errors.js';
 import {transcribeTelegramVoice} from './voice.js';
 import {storeSourceEvent,taskHistory,claimNotification,finishNotification} from './task-store.js';
@@ -323,16 +324,9 @@ async function prepareAnswer(update, env) {
       info='Обновление запущено: найдено '+result.queued+
         ' новых писем. Обработка идёт в очереди.\n\n';
     }
-    const rows=await listEmails(env,"status IN ('NEW','WORK_REVIEW','WORK_OUTLOOK')");
-    const view=fromRows('📨 Рабочая почта',rows,'email');
-    return {...view,text:info+view.text,
-      reply_markup:{inline_keyboard:[
-        ...view.reply_markup.inline_keyboard.slice(0,-1),
-        [{text:'🔄 Обновить',callback_data:'mail:refresh'},
-         {text:'⚠️ На разбор',callback_data:'review'}],
-        [{text:'☰ Меню',callback_data:'menu'}]
-      ]}};
+    return segmentOverview(env,info.trim());
   }
+  if(callback?.startsWith('seg:'))return segmentView(env,callback.slice(4));
   if(action==='review'){
     const [letters,telegram]=await Promise.all([
       listEmails(env,"status='WORK_REVIEW'"),

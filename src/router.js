@@ -62,7 +62,7 @@ export const QUICK_ACTIONS = new Set([
 export function isQuickAction(action) {
   const value=String(action||'');
   return QUICK_ACTIONS.has(value)||
-    /^(?:task:|mention:view:|mention:(?:task|news|ignore):|email:view:|email:(?:task|news|ignore):)/.test(value);
+    /^(?:task:|seg:|mention:view:|mention:(?:task|news|ignore):|email:view:|email:(?:task|news|ignore):)/.test(value);
 }
 export function hasValidSecret(received, expected) {
   if (typeof received !== 'string' || typeof expected !== 'string' || !expected.length || received.length !== expected.length) return false;
