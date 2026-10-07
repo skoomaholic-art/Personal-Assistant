@@ -193,3 +193,14 @@ test('a legacy button pressed after cutover is answered by the Worker without th
   assert.match(sent.at(-1).text,/Очистить историю/);
   assert.equal(queued.length,0);
 });
+
+test('admin form pages keep the Origin header usable for their own posts',async()=>{
+  const {env}=setup();
+  for(const path of ['/admin/telegram/cutover','/admin/import/tasks']){
+    const response=await worker.fetch(new Request(ORIGIN+path,{headers:{authorization:AUTH}}),env);
+    assert.equal(response.status,200,path);
+    // "no-referrer" makes browsers send "Origin: null" on same-origin form posts.
+    assert.equal(response.headers.get('referrer-policy'),'same-origin',path);
+  }
+  assert.equal((await worker.fetch(post({action:'switch',confirm:'yes'},{origin:'null'}),env)).status,403);
+});

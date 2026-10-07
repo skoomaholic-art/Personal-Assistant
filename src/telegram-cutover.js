@@ -8,7 +8,8 @@ const HEADERS={
   'content-type':'text/html; charset=utf-8',
   'cache-control':'private, no-store',
   'x-content-type-options':'nosniff',
-  'referrer-policy':'no-referrer',
+  // same-origin keeps the Origin header on our own form posts; no-referrer would null it.
+  'referrer-policy':'same-origin',
   'content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
 };
 const CHALLENGE={'www-authenticate':'Basic realm="Rahal Mamut cutover", charset="UTF-8"'};
