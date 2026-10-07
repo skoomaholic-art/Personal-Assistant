@@ -11,6 +11,7 @@
 - `WORKER_EMAIL_NOTIFICATIONS` (включён): В wrangler.jsonc включено, а docs/WORK_ONLY.md и STAGING_STATUS.md описывают как выключенное. Нужно решение владельца.
 - `TELEGRAM_MENTION_WORKER_CALLBACKS_ENABLED` (включён): STAGING_STATUS.md описывает как выключенное до переключения webhook. Нужно решение владельца.
 - `REMINDERS_ENABLED` (включён): В wrangler.jsonc включено, а docs/WORK_ONLY.md и STAGING_STATUS.md описывают как выключенное. Нужно решение владельца.
+- `GOOGLE_OAUTH_SETUP_ENABLED` (включён): Временно включено для повторного входа в Google после смены SETUP_PASSWORD. Выключить после входа.
 
 ## Приём входящих
 
@@ -18,6 +19,7 @@
 |---|---|---|---|
 | `GMAIL_POLL_ENABLED` | включён | Опрос Gmail по Cron и разбор новых писем. | Google OAuth владельца |
 | `GMAIL_PERSONAL_INGEST_ENABLED` | выключен | Сохранение и разбор личных писем. В ASSISTANT_SCOPE=work не действует. | - |
+| `GMAIL_NONWORK_INDEX_ENABLED` | включён | Раздел «Не рабочее»: опрос всего входящего Gmail, по нерабочим письмам сохраняются только отправитель и тема, без текста и без передачи в модель. | Решение владельца (принято 2026-10-07) |
 | `MAIL_INGEST_ENABLED` | выключен | Старый мост приёма писем из Apps Script (/ingest). | INGEST_SECRET |
 | `OUTLOOK_POLL_ENABLED` | выключен | Чтение рабочей почты через Microsoft Graph. | Одобренное компанией приложение Entra ID и OAuth |
 | `TELEGRAM_MENTIONS_ENABLED` | включён | Приём сообщений из выбранных Telegram-чатов от локального слушателя. | TELEGRAM_MENTION_INGEST_SECRET, списки чатов, миграция 0006 |
@@ -68,7 +70,7 @@
 
 | Флаг | Staging | Что включает | Что нужно для включения |
 |---|---|---|---|
-| `GOOGLE_OAUTH_SETUP_ENABLED` | выключен | Разовый вход Google для привязки Gmail. Выключать сразу после привязки. | - |
+| `GOOGLE_OAUTH_SETUP_ENABLED` | включён | Разовый вход Google для привязки Gmail. Выключать сразу после привязки. | - |
 | `GOOGLE_CALENDAR_SETUP_ENABLED` | выключен | Разовый вход Google для привязки календаря. Выключать сразу после привязки. | - |
 | `OUTLOOK_SETUP_ENABLED` | выключен | Разовый вход Microsoft для привязки Outlook. Выключать сразу после привязки. | MS_CLIENT_ID, MS_CLIENT_SECRET |
 | `TELEGRAM_CUTOVER_ENABLED` | включён | Страница владельца /admin/telegram/cutover: переключение существующего бота на Worker и откат на Apps Script. | SETUP_PASSWORD; выключить после успешного переключения и проверки |

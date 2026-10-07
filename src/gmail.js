@@ -4,6 +4,8 @@
 import {loadEncryptedGmailRefreshToken} from './google-oauth.js';
 import {triageWorkMailSubject} from './work-triage.js';
 import {storeSourceEvent} from './task-store.js';
+import {chatCompletion,aiConfigured} from './ai.js';
+import {TOPICS,topicOf,segmentFor,setSegment,setTaskSegmentOnce} from './segments.js';
 
 const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const categories = new Set(['ЗАДАЧА','ДОПОЛНЕНИЕ','ВАЖНО','НОВОСТЬ','FYI','ВСТРЕЧА','ДОКУМЕНТ','ПИСЬМО','МУСОР']);
@@ -183,11 +185,12 @@ export function gmailAttachmentManifest(message) {
 }
 
 export async function analyzeGmailEmail(env,email) {
-  if (!env.GROQ_API_KEY || (env.ASSISTANT_SCOPE==='work' && env.OUTLOOK_AI_ENABLED!=='true')){
+  if (!aiConfigured(env) || (env.ASSISTANT_SCOPE==='work' && env.OUTLOOK_AI_ENABLED!=='true')){
     const basic=triageWorkMailSubject(email.subject);
     return {...basic,classification:basic.needs_review?'REVIEW':
       basic.category==='НОВОСТЬ'?'NEWS':'INFO',title:cut(email.subject,180),
-      description:basic.summary,assignee:'',related_task_id:'',owner_action_required:false};
+      description:basic.summary,assignee:'',related_task_id:'',owner_action_required:false,
+      topic:topicOf(email.subject)};
   }
   const open=await env.DB.prepare(
     "SELECT task_id,title,description,status FROM tasks WHERE status IN ('NEW','IN_PROGRESS') ORDER BY updated_at DESC LIMIT 30"
@@ -202,47 +205,27 @@ export async function analyzeGmailEmail(env,email) {
     'assignee - указанный ответственный, иначе пустая строка. owner_action_required=true только если действие требуется от Александра. '+
     'category: ЗАДАЧА,ДОПОЛНЕНИЕ,ВАЖНО,НОВОСТЬ,FYI,ВСТРЕЧА,ДОКУМЕНТ,ПИСЬМО,МУСОР. '+
     'priority: высокий,средний,низкий. summary - до трёх коротких предложений. '+
+    'Важность определяй только по тексту письма: высокий - явная срочность или близкий срок, низкий - без срока и без действий, иначе средний. '+
+    'topic - тема письма: SPORT - спорт, матчи, турниры, спортивные трансляции и расписания; CONTENT - фильмы, сериалы, каталог, витрина, баннеры, релизы; PROMO - промокоды, подписки, тарифы, акции; OTHER - всё остальное. '+
     'Если действий нет, action="Действий не требуется". Не придумывай сроки, шаги, ответственных или факты. '+
     'deadline_text="Не указан" и deadline_iso="", если срока нет. Отвечай на русском.';
-  const res=await fetch('https://api.groq.com/openai/v1/chat/completions',{
-    method:'POST',
-    headers:{Authorization:'Bearer '+env.GROQ_API_KEY,'content-type':'application/json'},
-    body:JSON.stringify({
-      model:env.GROQ_MODEL || 'openai/gpt-oss-20b',
-      messages:[{role:'system',content:prompt},
-        {role:'user',content:'Открытые задачи:\n'+JSON.stringify(existing)+'\n\nПисьмо:\nОт: '+email.from_name+'\nТема: '+email.subject+'\nДата: '+email.received_at+'\nТекст:\n'+email.body}],
-      temperature:0.2,max_completion_tokens:750,
-      ...(['openai/gpt-oss-20b','openai/gpt-oss-120b'].includes(String(env.GROQ_MODEL||'openai/gpt-oss-20b'))
-        ? {reasoning_effort:'low'} : {}),
-      response_format: ['openai/gpt-oss-20b','openai/gpt-oss-120b'].includes(String(env.GROQ_MODEL||'openai/gpt-oss-20b'))
-        ? {type:'json_schema',json_schema:{name:'email_analysis',strict:true,schema:{
-          type:'object',
-          properties:{
-            category:{type:'string',enum:[...categories]},
-            priority:{type:'string',enum:[...priorities]},
-            summary:{type:'string'},
-            action:{type:'string'},
-            deadline_text:{type:'string'},
-            deadline_iso:{type:'string'},
-            classification:{type:'string',enum:[...classifications]},
-            title:{type:'string'},
-            description:{type:'string'},
-            assignee:{type:'string'},
-            related_task_id:{type:'string'},
-            owner_action_required:{type:'boolean'}
-          },
-          required:['category','priority','summary','action','deadline_text','deadline_iso',
-            'classification','title','description','assignee','related_task_id','owner_action_required'],
-          additionalProperties:false
-        }}}
-        : {type:'json_object'}
-    }),signal:AbortSignal.timeout(18000)
+  const fields={
+    category:{type:'string',enum:[...categories]},
+    priority:{type:'string',enum:[...priorities]},
+    summary:{type:'string'},action:{type:'string'},
+    deadline_text:{type:'string'},deadline_iso:{type:'string'},
+    classification:{type:'string',enum:[...classifications]},
+    title:{type:'string'},description:{type:'string'},assignee:{type:'string'},
+    related_task_id:{type:'string'},owner_action_required:{type:'boolean'},
+    topic:{type:'string',enum:TOPICS}
+  };
+  const {value:obj}=await chatCompletion(env,{
+    temperature:0.2,maxTokens:750,timeoutMs:18000,schemaName:'email_analysis',
+    schema:{type:'object',properties:fields,required:Object.keys(fields),additionalProperties:false},
+    accept:object=>typeof object.summary==='string'||typeof object.action==='string',
+    messages:[{role:'system',content:prompt},
+      {role:'user',content:'Открытые задачи:\n'+JSON.stringify(existing)+'\n\nПисьмо:\nОт: '+email.from_name+'\nТема: '+email.subject+'\nДата: '+email.received_at+'\nТекст:\n'+email.body}]
   });
-  if (!res.ok) throw new Error('Groq analysis HTTP '+res.status);
-  const data=await res.json();
-  const raw=data?.choices?.[0]?.message?.content;
-  if (!raw) throw new Error('Groq analysis returned no content');
-  const obj=JSON.parse(raw);
   const knownIds=new Set(existing.map(x=>x.task_id));
   const classification=classifications.has(obj.classification)?obj.classification:'REVIEW';
   const deadline=typeof obj.deadline_iso==='string' && !Number.isNaN(Date.parse(obj.deadline_iso))
@@ -260,6 +243,7 @@ export async function analyzeGmailEmail(env,email) {
     assignee:cut(obj.assignee,180),
     related_task_id:knownIds.has(obj.related_task_id)?obj.related_task_id:'',
     owner_action_required:obj.owner_action_required===true,
+    topic:TOPICS.includes(obj.topic)&&obj.topic!=='OTHER'?obj.topic:topicOf(email.subject+'\n'+email.body),
     needs_review:classification==='REVIEW'||
       ((classification==='TASK'||classification==='UPDATE')&&obj.owner_action_required!==true)
   };
@@ -293,6 +277,20 @@ export async function ingestGmailId(env, id) {
     const raw=await gmailMessage(token,id);
     const workMail=isWorkGmailMessage(raw,env);
     if(!workMail&&(env.ASSISTANT_SCOPE==='work'||env.GMAIL_PERSONAL_INGEST_ENABLED!=='true')) {
+      if(env.GMAIL_NONWORK_INDEX_ENABLED==='true'){
+        // The owner asked for a separate non-work list. Keep the sender and
+        // the subject only: no body, no attachments, no external analysis.
+        const h=gmailHeaders(raw);
+        const received=Number(raw?.internalDate);
+        const indexed=await env.DB.prepare(
+          "UPDATE emails SET status='NONWORK',received_at=?,from_name=?,from_email=?,subject=? "+
+          "WHERE email_id=? AND status='ANALYZING' AND received_at=?"
+        ).bind(Number.isFinite(received)&&received>0?new Date(received).toISOString():claimedAt,
+          cut(h.from,250),addresses(h.from)[0]||'',cut(h.subject||'Без темы',300),id,claimedAt).run();
+        if(indexed.meta.changes!==1)throw new Error('Gmail claim ownership lost');
+        await setSegment(env,'email',id,'NONWORK');
+        return {not_work:true,indexed:true};
+      }
       // Before the owner enables personal mail, do not retain its contents.
       await env.DB.prepare(
         "UPDATE emails SET status='IGNORED_NONWORK' "+
@@ -311,7 +309,7 @@ export async function ingestGmailId(env, id) {
       ? {category:'ПИСЬМО',priority:'средний',
           summary:'Рабочая пересылка: '+cut(email.subject,350)+'. Исходный отправитель не подтверждён.',
           action:'Проверить исходное письмо вручную',deadline_text:'Не указан',
-          deadline_iso:'',needs_review:true}
+          deadline_iso:'',needs_review:true,topic:topicOf(email.subject)}
       : await analyzeGmailEmail(env,email);
     const classification=analysis.needs_review?'REVIEW':
       ((analysis.classification==='TASK'||analysis.classification==='UPDATE')&&
@@ -346,6 +344,16 @@ export async function ingestGmailId(env, id) {
       notify?'queued':'disabled',id,claimedAt);
     const result=await update.run();
     if(result.meta.changes!==1) throw new Error('Gmail claim ownership lost');
+    // Sorting is a convenience view; a failure here must not lose the email.
+    try{
+      const segment=segmentFor({workMail,classification,category:analysis.category,
+        topic:analysis.topic,text:email.subject+'\n'+email.body});
+      await setSegment(env,'email',email.email_id,segment);
+      if(source.taskId)await setTaskSegmentOnce(env,source.taskId,segment==='NEWS'?
+        segmentFor({workMail,topic:analysis.topic,text:email.subject+'\n'+email.body}):segment);
+    }catch(segmentError){
+      console.error(JSON.stringify({event:'segment_store_failed',error_type:segmentError?.name||'Error'}));
+    }
     const task=Boolean(source.created);
     // Apps Script still owns production notifications until cutover.
     if(notify) {
@@ -393,12 +401,26 @@ export async function pollGmail(env) {
     const floor=Number(row?.data);
     if(!Number.isSafeInteger(floor)||floor<=0)
       throw new Error('Gmail start checkpoint invalid');
-    q='in:inbox after:'+floor+' -in:spam -in:trash';
+    let from=floor;
+    if(env.GMAIL_NONWORK_INDEX_ENABLED==='true'){
+      // The owner asked to sort new mail only: the whole-inbox listing starts
+      // when the non-work section is first switched on, not at the old floor.
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO states(chat_id,mode,data,updated_at) VALUES(?,?,?,?)"
+      ).bind('system:gmail-index-floor','checkpoint',String(Math.floor(Date.now()/1000)),
+        Math.floor(Date.now()/1000)).run();
+      const indexRow=await env.DB.prepare(
+        'SELECT data FROM states WHERE chat_id=?'
+      ).bind('system:gmail-index-floor').first();
+      const indexFloor=Number(indexRow?.data);
+      if(Number.isSafeInteger(indexFloor)&&indexFloor>from)from=indexFloor;
+    }
+    q='in:inbox after:'+from+' -in:spam -in:trash';
   }
   if(!q)q='in:inbox newer_than:2d -in:spam -in:trash';
   // Explicit queries are never allowed to override the spam/trash exclusion.
   q='('+q+') -in:spam -in:trash';
-  if(env.ASSISTANT_SCOPE==='work'){
+  if(env.ASSISTANT_SCOPE==='work'&&env.GMAIL_NONWORK_INDEX_ENABLED!=='true'){
     // Scope the Gmail LIST API itself to work headers, rather than fetching
     // arbitrary personal messages and discarding them after a full download.
     // Manual forwards from the corporate address match from:@work-domain.

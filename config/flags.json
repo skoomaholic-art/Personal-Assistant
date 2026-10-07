@@ -23,6 +23,13 @@
       "effect": "Сохранение и разбор личных писем. В ASSISTANT_SCOPE=work не действует."
     },
     {
+      "name": "GMAIL_NONWORK_INDEX_ENABLED",
+      "staging": true,
+      "group": "ingest",
+      "effect": "Раздел «Не рабочее»: опрос всего входящего Gmail, по нерабочим письмам сохраняются только отправитель и тема, без текста и без передачи в модель.",
+      "needs": "Решение владельца (принято 2026-10-07)"
+    },
+    {
       "name": "MAIL_INGEST_ENABLED",
       "staging": false,
       "group": "ingest",
@@ -197,9 +204,10 @@
     },
     {
       "name": "GOOGLE_OAUTH_SETUP_ENABLED",
-      "staging": false,
+      "staging": true,
       "group": "setup",
-      "effect": "Разовый вход Google для привязки Gmail. Выключать сразу после привязки."
+      "effect": "Разовый вход Google для привязки Gmail. Выключать сразу после привязки.",
+      "note": "Временно включено для повторного входа в Google после смены SETUP_PASSWORD. Выключить после входа."
     },
     {
       "name": "GOOGLE_CALENDAR_SETUP_ENABLED",

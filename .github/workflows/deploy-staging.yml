@@ -85,6 +85,8 @@ jobs:
       - name: Create unified task schema only when absent
         if: steps.unified_schema.outputs.present == 'false'
         run: npx --yes wrangler@4 d1 execute rahal-mamut-staging --remote --file=migrations/0007_unified_task_system.sql --config=wrangler.jsonc
+      - name: Create segment table (idempotent)
+        run: npx --yes wrangler@4 d1 execute rahal-mamut-staging --remote --file=migrations/0008_item_segments.sql --config=wrangler.jsonc
       - name: Publish existing staging Worker
         run: npx --yes wrangler@4 deploy --config=wrangler.jsonc
       - name: Report readiness without disclosing Cloudflare secrets
