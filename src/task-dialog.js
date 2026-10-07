@@ -1,4 +1,5 @@
-import {throwForResponse,recordAiFailure,aiFailureText} from './ai-errors.js';
+import {recordAiFailure,aiFailureText} from './ai-errors.js';
+import {chatCompletion,aiConfigured} from './ai.js';
 import {backMarkup,taskMarkup,safeText,normalizePriority,localDayBounds} from './router.js';
 import {proposeCalendar,calendarAgenda,calendarFollowup} from './calendar.js';
 import {outlookAgenda} from './outlook.js';
@@ -219,11 +220,11 @@ async function interpret(env,chatId,text,context) {
       'могу без неё показывать задачи и отчёт. Чтобы создать задачу, напиши '+
       '«Добавь задачу: ...» или нажми «Новая задача».'};
   }
-  if(!env.GROQ_API_KEY)return null;
+  if(!aiConfigured(env))return null;
   const [history,tasks,memory]=await Promise.all([
-    env.DB.prepare('SELECT role,content FROM history WHERE chat_id=? ORDER BY id DESC LIMIT 6')
+    env.DB.prepare('SELECT role,content FROM history WHERE chat_id=? ORDER BY id DESC LIMIT 4')
       .bind(workOnly(env)?'work:'+chatId:chatId).all(),
-    env.DB.prepare("SELECT title,status,due_text FROM tasks WHERE status NOT IN ('DONE','DELETED') ORDER BY created_at DESC LIMIT 12").all(),
+    env.DB.prepare("SELECT title,status,due_text FROM tasks WHERE status NOT IN ('DONE','DELETED') ORDER BY created_at DESC LIMIT 8").all(),
     personalMemory(env,chatId)
   ]);
   const fields={
@@ -244,7 +245,7 @@ async function interpret(env,chatId,text,context) {
     'В поле reply разговаривай естественно, по-человечески, без канцелярита и лишних инструкций. Старайся понимать намерение в контексте разговора.',
     'Не превращай каждую беседу в задачу. Создавай, удаляй, отправляй и изменяй только после прямой просьбы владельца и отдельного подтверждения действия.',
     'Не придумывай электронные адреса, Telegram-получателей, даты или факты. Всегда сообщай, какое действие не выполнено.',
-    'Учитывай до шести предыдущих сообщений и текущие задачи.',
+    'Учитывай предыдущие сообщения и текущие задачи.',
     'Определи намерение человека: обычный разговор, задачи, календарь, письмо, сообщение другому человеку через бота, подтверждённая память.',
     'create_event: извлеки title,start_iso,end_iso,description,location. Дата и время ISO с UTC+05:00. Если неясны, needs_details=true.',
     'calendar_today/calendar_week: список событий личного календаря.',
@@ -282,30 +283,15 @@ async function interpret(env,chatId,text,context) {
     'Подтверждённая память: '+JSON.stringify(memory),
     'Текущий сценарий: '+JSON.stringify(context||{})
   ].join('\n');
-  const model=String(env.GROQ_MODEL||'openai/gpt-oss-20b');
-  const strict=['openai/gpt-oss-20b','openai/gpt-oss-120b'].includes(model);
-  const response=await fetch('https://api.groq.com/openai/v1/chat/completions',{
-    method:'POST',
-    headers:{authorization:'Bearer '+env.GROQ_API_KEY,'content-type':'application/json'},
-    body:JSON.stringify({
-      model,temperature:0.2,max_completion_tokens:1200,
-      messages:[{role:'system',content:system},...(history.results||[]).reverse()
-        .map(h=>({role:h.role,content:trim(h.content,650)})),
-        {role:'user',content:trim(text,2500)}],
-      ...(strict?{reasoning_effort:'low'}:{}),
-      response_format:strict?{type:'json_schema',json_schema:{
-        name:'assistant_intent',strict:true,schema:{
-          type:'object',properties:fields,required:Object.keys(fields),additionalProperties:false
-        }
-      }}:{type:'json_object'}
-    }),
-    signal:AbortSignal.timeout(21000)
+  const {value}=await chatCompletion(env,{
+    temperature:0.2,maxTokens:1000,timeoutMs:21000,schemaName:'assistant_intent',
+    schema:{type:'object',properties:fields,required:Object.keys(fields),additionalProperties:false},
+    accept:object=>Boolean(approved[object.intent]),
+    messages:[{role:'system',content:system},...(history.results||[]).reverse()
+      .map(h=>({role:h.role,content:trim(h.content,400)})),
+      {role:'user',content:trim(text,2500)}]
   });
-  if(!response.ok)await throwForResponse(response);
-  const result=await response.json();
-  const object=JSON.parse(String(result?.choices?.[0]?.message?.content||'{}'));
-  if(!approved[object.intent])throw new Error('Groq intent absent');
-  return object;
+  return value;
 }
 async function saveDraft(env,chatId,updateId) {
   const row=await state(env,chatId);
